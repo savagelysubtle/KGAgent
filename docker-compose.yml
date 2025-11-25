@@ -1,0 +1,172 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # Neo4j Graph Database - Knowledge Graph Storage
+  # =============================================================================
+  neo4j:
+    image: neo4j:5.15-community
+    container_name: kg-agent-neo4j
+    hostname: neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"  # Neo4j Browser (HTTP)
+      - "7687:7687"  # Bolt protocol
+    environment:
+      # Authentication
+      - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-password}
+      # Memory Configuration
+      - NEO4J_dbms_memory_pagecache_size=512M
+      - NEO4J_dbms_memory_heap_initial__size=512M
+      - NEO4J_dbms_memory_heap_max__size=1G
+      # Plugins - Enable APOC
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*
+      # APOC Configuration
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      # Bolt connector
+      - NEO4J_dbms_connector_bolt_listen__address=:7687
+      - NEO4J_dbms_connector_http_listen__address=:7474
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kg-network
+
+  # =============================================================================
+  # Redis - Message Broker & Caching
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: kg-agent-redis
+    hostname: redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - kg-network
+
+  # =============================================================================
+  # FastAPI Backend - KG Agent API
+  # =============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kg-agent-api
+    hostname: api
+    restart: unless-stopped
+    ports:
+      - '8000:8000'
+    environment:
+      - APP_ENV=production
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+      # Redis
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Neo4j - Use Docker service name
+      - NEO4J_URI=neo4j://neo4j:7687
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      # ChromaDB
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
+      - CHROMA_COLLECTION_NAME=document_chunks
+      # Storage
+      - STORAGE_DIR=/app/storage
+      - HF_HOME=/app/models/embeddings
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./storage:/app/storage
+      - ./cache:/app/cache
+      - ./data:/app/data
+      - ./models:/app/models
+    command: uvicorn kg_agent.api.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - kg-network
+
+  # =============================================================================
+  # Celery Worker - Background Task Processing
+  # =============================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kg-agent-worker
+    hostname: worker
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Neo4j
+      - NEO4J_URI=neo4j://neo4j:7687
+      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
+      # ChromaDB
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
+      # Storage
+      - STORAGE_DIR=/app/storage
+      - HF_HOME=/app/models/embeddings
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./storage:/app/storage
+      - ./cache:/app/cache
+      - ./data:/app/data
+      - ./models:/app/models
+    command: celery -A kg_agent.tasks.celery_app worker --loglevel=info
+    networks:
+      - kg-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  kg-network:
+    driver: bridge
+    name: kg-agent-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  neo4j_data:
+    name: kg-agent-neo4j-data
+  neo4j_logs:
+    name: kg-agent-neo4j-logs
+  neo4j_import:
+    name: kg-agent-neo4j-import
+  neo4j_plugins:
+    name: kg-agent-neo4j-plugins
+  redis_data:
+    name: kg-agent-redis-data
