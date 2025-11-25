@@ -7,7 +7,7 @@ import asyncio
 from ..core.logging import logger
 from ..core.config import settings
 from ..services.vector_store import VectorStoreService, get_vector_store
-from ..services.graph_builder import GraphBuilderService, get_graph_builder
+from ..services.graphiti_service import GraphitiService, get_graphiti_service
 from ..services.embedder import EmbedderService
 from ..services.document_tracker import (
     DocumentTrackerService,
@@ -89,14 +89,14 @@ class RAGTools:
 
     Provides tools for:
     - Vector search in ChromaDB
-    - Graph search in Neo4j
+    - Graph search in FalkorDB via Graphiti
     - Database statistics
     """
 
     def __init__(self):
         self._vector_store: Optional[VectorStoreService] = None
         self._embedder: Optional[EmbedderService] = None
-        self._graph_builder: Optional[GraphBuilderService] = None
+        self._graphiti: Optional[GraphitiService] = None
         self._initialized = False
 
     async def initialize(self) -> bool:
@@ -113,10 +113,10 @@ class RAGTools:
             self._vector_store = VectorStoreService()
             logger.info("VectorStoreService initialized")
 
-            # Initialize graph builder
-            self._graph_builder = get_graph_builder()
-            await self._graph_builder.initialize(max_retries=2)
-            logger.info("GraphBuilderService initialized")
+            # Initialize Graphiti service
+            self._graphiti = get_graphiti_service()
+            await self._graphiti.initialize()
+            logger.info("GraphitiService initialized")
 
             self._initialized = True
             return True
@@ -187,7 +187,9 @@ class RAGTools:
         limit: int = 10
     ) -> List[SearchResult]:
         """
-        Search the knowledge graph (Neo4j) for structured information.
+        Search the knowledge graph (FalkorDB via Graphiti) for structured information.
+
+        Uses hybrid search (BM25 + cosine similarity) for best results.
 
         Args:
             query: The search query text
@@ -199,24 +201,38 @@ class RAGTools:
         if not self._initialized:
             await self.initialize()
 
-        if not self._graph_builder:
+        if not self._graphiti:
             logger.warning("Graph search service not available")
             return []
 
         try:
-            result = await self._graph_builder.search_graph(query, limit=limit)
+            result = await self._graphiti.search(query, num_results=limit)
 
             search_results = []
-            if result.get("status") == "success" and result.get("results"):
-                for item in result["results"]:
+            if result.get("status") == "success":
+                # Add edges (relationships/facts) as results
+                for edge in result.get("edges", []):
                     search_results.append(SearchResult(
-                        text=item.get("text", ""),
-                        source=item.get("source", "unknown"),
-                        score=None,  # Graph search doesn't provide scores
+                        text=edge.get("fact", ""),
+                        source=f"relationship:{edge.get('name', 'unknown')}",
+                        score=None,
                         metadata={
-                            "id": item.get("id"),
-                            "doc_id": item.get("doc_id"),
-                            "created_at": item.get("created_at")
+                            "source_node": edge.get("source_node"),
+                            "target_node": edge.get("target_node"),
+                            "created_at": edge.get("created_at"),
+                            "valid_at": edge.get("valid_at"),
+                        }
+                    ))
+                
+                # Add nodes (entities) as results
+                for node in result.get("nodes", []):
+                    search_results.append(SearchResult(
+                        text=f"{node.get('name', 'Unknown')}: {node.get('summary', '')}",
+                        source=f"entity:{','.join(node.get('labels', ['Unknown']))}",
+                        score=None,
+                        metadata={
+                            "uuid": node.get("uuid"),
+                            "labels": node.get("labels"),
                         }
                     ))
 
@@ -267,7 +283,7 @@ class RAGTools:
         if not self._initialized:
             await self.initialize()
 
-        if not self._graph_builder:
+        if not self._graphiti:
             return GraphStats(
                 total_nodes=0,
                 total_edges=0,
@@ -277,13 +293,13 @@ class RAGTools:
             )
 
         try:
-            stats = await self._graph_builder.get_graph_stats()
+            stats = await self._graphiti.get_stats()
 
             return GraphStats(
-                total_nodes=stats.get("total_nodes", 0),
-                total_edges=stats.get("total_edges", 0),
-                entity_types=stats.get("entity_types", {}),
-                relationship_types=stats.get("relationship_types", {}),
+                total_nodes=stats.get("total_entities", 0),
+                total_edges=stats.get("total_relationships", 0),
+                entity_types={"episodes": stats.get("total_episodes", 0)},
+                relationship_types={},
                 connected=stats.get("connected", False)
             )
 
@@ -412,10 +428,13 @@ class RAGTools:
         """
         Delete a document and its associated data from all databases.
 
+        Note: Graph node deletion is not fully supported with Graphiti.
+        The document tracker record and vectors will be deleted.
+
         Args:
             doc_id: The document ID to delete
             delete_vectors: Whether to delete vectors from ChromaDB (default: True)
-            delete_graph_nodes: Whether to delete nodes from Neo4j (default: True)
+            delete_graph_nodes: Whether to delete nodes from graph (currently limited)
 
         Returns:
             DeleteResult with details of the deletion
@@ -444,14 +463,10 @@ class RAGTools:
                 except Exception as e:
                     logger.warning(f"Failed to delete vectors: {e}")
 
-            # Delete nodes from Neo4j
+            # Note: Graphiti doesn't expose direct node deletion
+            # Graph data is managed through temporal invalidation
             if delete_graph_nodes and document.graph_node_ids:
-                try:
-                    graph_builder = get_graph_builder()
-                    result = await graph_builder.delete_by_node_ids(document.graph_node_ids)
-                    graph_nodes_deleted = result.get("nodes_deleted", 0)
-                except Exception as e:
-                    logger.warning(f"Failed to delete graph nodes: {e}")
+                logger.info(f"Graph node deletion requested but not supported with Graphiti")
 
             # Delete document record
             tracker.delete_document(doc_id)
@@ -483,10 +498,12 @@ class RAGTools:
         """
         Delete all documents from a specific source.
 
+        Note: Graph node deletion is not fully supported with Graphiti.
+
         Args:
             source_pattern: Pattern to match source URLs (e.g., "example.com")
             delete_vectors: Whether to delete vectors from ChromaDB
-            delete_graph_nodes: Whether to delete nodes from Neo4j
+            delete_graph_nodes: Whether to delete nodes from graph (currently limited)
 
         Returns:
             DeleteResult with details of the deletion
@@ -505,7 +522,6 @@ class RAGTools:
                 )
 
             total_vectors = 0
-            total_graph_nodes = 0
             total_docs = 0
 
             for doc in documents:
@@ -520,15 +536,6 @@ class RAGTools:
                     except Exception as e:
                         logger.warning(f"Failed to delete vectors for {doc.id}: {e}")
 
-                # Delete graph nodes
-                if delete_graph_nodes and doc.graph_node_ids:
-                    try:
-                        graph_builder = get_graph_builder()
-                        result = await graph_builder.delete_by_node_ids(doc.graph_node_ids)
-                        total_graph_nodes += result.get("nodes_deleted", 0)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete graph nodes for {doc.id}: {e}")
-
                 # Delete document record
                 if tracker.delete_document(doc.id):
                     total_docs += 1
@@ -537,7 +544,7 @@ class RAGTools:
                 success=True,
                 documents_deleted=total_docs,
                 vectors_deleted=total_vectors,
-                graph_nodes_deleted=total_graph_nodes,
+                graph_nodes_deleted=0,
                 message=f"Deleted {total_docs} documents matching '{source_pattern}'"
             )
 
@@ -559,7 +566,10 @@ class RAGTools:
         description: Optional[str] = None
     ) -> EntityCreateResult:
         """
-        Create or update an entity in the knowledge graph.
+        Create or update an entity in the knowledge graph using Graphiti.
+
+        This creates an episode describing the entity, which Graphiti processes
+        to extract and deduplicate the entity against the existing graph.
 
         Args:
             name: The name of the entity (e.g., "Steve", "Python", "OpenAI")
@@ -573,7 +583,7 @@ class RAGTools:
         if not self._initialized:
             await self.initialize()
 
-        if not self._graph_builder:
+        if not self._graphiti:
             return EntityCreateResult(
                 success=False,
                 entity_id=None,
@@ -581,40 +591,39 @@ class RAGTools:
             )
 
         try:
-            # Prepare properties
-            props = properties or {}
+            # Build a natural language description for Graphiti to process
+            props_str = ""
+            if properties:
+                props_str = ". ".join([f"{k}: {v}" for k, v in properties.items()])
+            
+            content = f"{name} is a {entity_type}."
             if description:
-                props["description"] = description
+                content += f" {description}"
+            if props_str:
+                content += f" Additional information: {props_str}"
 
-            # Create entity in Neo4j
-            with self._graph_builder.driver.session() as session:
-                result = session.run("""
-                    MERGE (e:Entity {name: $name})
-                    SET e.type = $entity_type,
-                        e.updated_at = datetime()
-                    SET e += $properties
-                    RETURN e.name as name, id(e) as id
-                """, {
-                    "name": name,
-                    "entity_type": entity_type,
-                    "properties": props
-                })
+            # Add as an episode - Graphiti will extract and deduplicate
+            result = await self._graphiti.add_episode(
+                content=content,
+                name=f"entity_creation_{name}",
+                source_description=f"Manual entity creation for {name}",
+            )
 
-                record = result.single()
-                if record:
-                    entity_id = str(record["id"])
-                    logger.info(f"Created/updated entity: {name} ({entity_type})")
-                    return EntityCreateResult(
-                        success=True,
-                        entity_id=entity_id,
-                        message=f"Successfully created entity '{name}' of type '{entity_type}'"
-                    )
-                else:
-                    return EntityCreateResult(
-                        success=False,
-                        entity_id=None,
-                        message="Failed to create entity - no result returned"
-                    )
+            if result.get("status") == "success":
+                entity_id = result.get("episode_id")
+                nodes_created = result.get("nodes_created", 0)
+                logger.info(f"Created entity via Graphiti: {name} ({entity_type})")
+                return EntityCreateResult(
+                    success=True,
+                    entity_id=entity_id,
+                    message=f"Successfully created entity '{name}' of type '{entity_type}' ({nodes_created} nodes)"
+                )
+            else:
+                return EntityCreateResult(
+                    success=False,
+                    entity_id=None,
+                    message=result.get("error", "Failed to create entity")
+                )
 
         except Exception as e:
             logger.error(f"Failed to create entity: {e}")
@@ -632,7 +641,10 @@ class RAGTools:
         properties: Optional[Dict[str, Any]] = None
     ) -> EntityCreateResult:
         """
-        Create a relationship between two entities in the knowledge graph.
+        Create a relationship between two entities in the knowledge graph using Graphiti.
+
+        This creates an episode describing the relationship, which Graphiti processes
+        to extract and deduplicate against the existing graph.
 
         Args:
             source_entity: The name of the source entity
@@ -646,7 +658,7 @@ class RAGTools:
         if not self._initialized:
             await self.initialize()
 
-        if not self._graph_builder:
+        if not self._graphiti:
             return EntityCreateResult(
                 success=False,
                 entity_id=None,
@@ -654,39 +666,39 @@ class RAGTools:
             )
 
         try:
-            props = properties or {}
+            # Build a natural language description for Graphiti to process
+            props_str = ""
+            if properties:
+                props_str = ". ".join([f"{k}: {v}" for k, v in properties.items()])
+            
+            # Convert relationship type to natural language
+            rel_phrase = relationship_type.lower().replace("_", " ")
+            content = f"{source_entity} {rel_phrase} {target_entity}."
+            if props_str:
+                content += f" Additional context: {props_str}"
 
-            # Create relationship in Neo4j
-            with self._graph_builder.driver.session() as session:
-                # First ensure both entities exist
-                result = session.run(f"""
-                    MERGE (source:Entity {{name: $source_name}})
-                    MERGE (target:Entity {{name: $target_name}})
-                    MERGE (source)-[r:{relationship_type}]->(target)
-                    SET r += $properties,
-                        r.created_at = datetime()
-                    RETURN type(r) as rel_type, id(r) as id
-                """, {
-                    "source_name": source_entity,
-                    "target_name": target_entity,
-                    "properties": props
-                })
+            # Add as an episode - Graphiti will extract and deduplicate
+            result = await self._graphiti.add_episode(
+                content=content,
+                name=f"relationship_{source_entity}_{target_entity}",
+                source_description=f"Manual relationship creation: {source_entity} -> {target_entity}",
+            )
 
-                record = result.single()
-                if record:
-                    rel_id = str(record["id"])
-                    logger.info(f"Created relationship: {source_entity} -[{relationship_type}]-> {target_entity}")
-                    return EntityCreateResult(
-                        success=True,
-                        entity_id=rel_id,
-                        message=f"Successfully created relationship '{source_entity}' -[{relationship_type}]-> '{target_entity}'"
-                    )
-                else:
-                    return EntityCreateResult(
-                        success=False,
-                        entity_id=None,
-                        message="Failed to create relationship - no result returned"
-                    )
+            if result.get("status") == "success":
+                episode_id = result.get("episode_id")
+                edges_created = result.get("edges_created", 0)
+                logger.info(f"Created relationship via Graphiti: {source_entity} -[{relationship_type}]-> {target_entity}")
+                return EntityCreateResult(
+                    success=True,
+                    entity_id=episode_id,
+                    message=f"Successfully created relationship '{source_entity}' -[{relationship_type}]-> '{target_entity}' ({edges_created} edges)"
+                )
+            else:
+                return EntityCreateResult(
+                    success=False,
+                    entity_id=None,
+                    message=result.get("error", "Failed to create relationship")
+                )
 
         except Exception as e:
             logger.error(f"Failed to create relationship: {e}")
@@ -699,6 +711,8 @@ class RAGTools:
     async def clear_all_data(self, confirm: bool = False) -> DeleteResult:
         """
         Clear ALL data from all databases. Use with extreme caution!
+
+        Note: Graph data clearing requires manual FalkorDB reset.
 
         Args:
             confirm: Must be True to actually perform the deletion
@@ -717,8 +731,6 @@ class RAGTools:
 
         try:
             vectors_cleared = 0
-            nodes_cleared = 0
-            edges_cleared = 0
             docs_cleared = 0
 
             # Clear ChromaDB
@@ -728,14 +740,9 @@ class RAGTools:
             except Exception as e:
                 logger.warning(f"Failed to clear vectors: {e}")
 
-            # Clear Neo4j
-            try:
-                graph_builder = get_graph_builder()
-                result = await graph_builder.clear_graph()
-                nodes_cleared = result.get("nodes_deleted", 0)
-                edges_cleared = result.get("edges_deleted", 0)
-            except Exception as e:
-                logger.warning(f"Failed to clear graph: {e}")
+            # Note: Graphiti/FalkorDB graph clearing requires direct database access
+            # For now, we just clear the document tracker
+            logger.warning("Graph data clearing not implemented - reset FalkorDB manually if needed")
 
             # Clear document tracker
             try:
@@ -751,8 +758,8 @@ class RAGTools:
                 success=True,
                 documents_deleted=docs_cleared,
                 vectors_deleted=vectors_cleared,
-                graph_nodes_deleted=nodes_cleared,
-                message=f"Cleared all data: {docs_cleared} documents, {vectors_cleared} vectors, {nodes_cleared} graph nodes"
+                graph_nodes_deleted=0,
+                message=f"Cleared data: {docs_cleared} documents, {vectors_cleared} vectors. Graph requires manual reset."
             )
 
         except Exception as e:

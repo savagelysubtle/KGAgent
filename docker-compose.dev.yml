@@ -7,13 +7,40 @@ version: '3.8'
 
 services:
   # =============================================================================
-  # Neo4j Graph Database - Knowledge Graph Storage
+  # FalkorDB Graph Database - Knowledge Graph Storage with Vector Search
+  # FalkorDB is a Redis-compatible graph database with built-in vector similarity
+  # =============================================================================
+  falkordb:
+    image: falkordb/falkordb:edge
+    container_name: kg-agent-falkordb-dev
+    hostname: falkordb
+    restart: unless-stopped
+    ports:
+      - "6380:6379"  # Redis-compatible port (using 6380 to avoid conflict with Redis)
+    environment:
+      - FALKORDB_ARGS=--requirepass ${FALKORDB_PASSWORD:-password}
+    volumes:
+      - falkordb_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${FALKORDB_PASSWORD:-password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - kg-dev-network
+
+  # =============================================================================
+  # Neo4j Graph Database - LEGACY (keeping for reference/migration)
+  # Note: Neo4j Community Edition doesn't support vector search required by Graphiti
   # =============================================================================
   neo4j:
     image: neo4j:5.15-community
     container_name: kg-agent-neo4j-dev
     hostname: neo4j
     restart: unless-stopped
+    profiles:
+      - legacy  # Only start with: docker compose --profile legacy up
     ports:
       - "7474:7474"  # Neo4j Browser (HTTP)
       - "7687:7687"  # Bolt protocol
@@ -83,6 +110,8 @@ networks:
 # Volumes
 # =============================================================================
 volumes:
+  falkordb_dev_data:
+    name: kg-agent-falkordb-dev-data
   neo4j_dev_data:
     name: kg-agent-neo4j-dev-data
   neo4j_dev_logs:

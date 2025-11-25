@@ -48,11 +48,21 @@ class Settings(BaseSettings):
     # Models
     HF_EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     HF_HOME: str = "./models/embeddings"
+    EMBEDDING_DIM: int = 384  # Dimension for all-MiniLM-L6-v2
 
-    # Neo4j (Graphiti)
-    NEO4J_URI: str = "bolt://localhost:7687"  # Use bolt:// for single instance, neo4j:// for cluster
+    # Graph Database (Graphiti)
+    # Supports: "neo4j" or "falkordb"
+    GRAPH_DRIVER: str = "falkordb"
+    
+    # Neo4j settings (if GRAPH_DRIVER=neo4j)
+    NEO4J_URI: str = "bolt://localhost:7687"  # Use bolt:// for single instance
     NEO4J_USERNAME: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
+    
+    # FalkorDB settings (if GRAPH_DRIVER=falkordb)
+    FALKORDB_HOST: str = "localhost"
+    FALKORDB_PORT: int = 6380
+    FALKORDB_PASSWORD: str = "password"
 
     # LM Studio / Local LLM
     LLM_BASE_URL: str = "http://localhost:1234/v1"
