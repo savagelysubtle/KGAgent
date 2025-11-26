@@ -1,198 +1,293 @@
-# KG Agent - Web-to-Knowledge-Graph ETL Pipeline
+# KG Agent - Knowledge Graph ETL Pipeline with AI Agent
 
-A comprehensive web crawling service built with Crawl4AI, FastAPI, and Celery for extracting LLM-ready content from websites.
+A comprehensive knowledge graph system that combines web crawling, document
+processing, entity extraction, and an AI-powered agent for intelligent querying.
+Built with FastAPI, Graphiti, FalkorDB, ChromaDB, and local LLM inference via LM
+Studio.
 
 ## Features
 
-- **Async Web Crawling**: High-performance crawling using Crawl4AI and Playwright
-- **LLM-Ready Content**: Markdown output optimized for language models
-- **Batch Processing**: Concurrent crawling with configurable limits
-- **Deep Crawling**: Recursive page exploration with link following
-- **Session Management**: Persistent browser sessions for authenticated sites
-- **Caching**: Intelligent content caching with TTL
-- **REST API**: FastAPI-based REST endpoints with OpenAPI documentation
-- **Async Tasks**: Celery-based background job processing
-- **Docker Support**: Containerized deployment with docker-compose
+### Core Pipeline
+
+- **Web Crawling**: High-performance async crawling using Crawl4AI and
+  Playwright
+- **Document Processing**: Upload and process PDFs, HTML, Markdown, and text
+  files
+- **Entity Extraction**: LLM-powered extraction of entities and relationships
+- **Resumable Processing**: Pause/resume long-running extraction jobs
+
+### Knowledge Graph
+
+- **FalkorDB Integration**: Graph database with vector search via Graphiti
+- **Temporal Knowledge**: Track entity changes over time with Graphiti's
+  temporal model
+- **Automatic Deduplication**: Smart entity resolution and relationship merging
+- **Hybrid Search**: Combined vector + graph search for comprehensive retrieval
+
+### AI Agent
+
+- **Local LLM**: Run entirely locally with LM Studio (Qwen, Llama, Mistral,
+  etc.)
+- **RAG Tools**: Vector search, graph search, and hybrid retrieval
+- **CopilotKit Integration**: AI assistant in the dashboard UI
+- **Tool Calling**: Agent can search, create entities, and manage data
+
+### Dashboard
+
+- **Modern React UI**: Next.js 16 with Tailwind CSS and shadcn/ui
+- **Real-time Updates**: Live pipeline status and entity counts
+- **Document Management**: Upload, view, and reprocess documents
+- **Graph Explorer**: Visualize knowledge graph entities and relationships
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Dashboard (Next.js)                      │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐ │
+│  │ Crawler  │ │ Upload   │ │ Graph    │ │ AI Agent (CopilotKit)│ │
+│  │ Control  │ │ Manager  │ │ Explorer │ │                      │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │ REST API
+┌─────────────────────────────────────────────────────────────────┐
+│                      FastAPI Backend                             │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐ │
+│  │ Crawler  │ │ Document │ │ Reprocess│ │ Agent API            │ │
+│  │ Routes   │ │ Routes   │ │ Routes   │ │ (Chat, Tools, Stats) │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                        Services Layer                            │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐  │
+│  │ Graphiti     │ │ Vector Store │ │ Resumable Pipeline       │  │
+│  │ Service      │ │ (ChromaDB)   │ │ (Entity Extraction)      │  │
+│  └──────────────┘ └──────────────┘ └──────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                      External Services                           │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐  │
+│  │ FalkorDB    │ │ LM Studio    │ │ Sentence Transformers    │  │
+│  │ (Graph DB)   │ │ (Local LLM)  │ │ (Embeddings)             │  │
+│  └──────────────┘ └──────────────┘ └──────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
-- Redis (for Celery broker and result backend)
-- Playwright browsers (installed automatically)
+- Node.js 18+ (or Bun)
+- Docker (for FalkorDB)
+- [LM Studio](https://lmstudio.ai/) with a loaded model
 
-### Installation
+### 1. Clone and Install
 
-1. Clone the repository:
 ```bash
 git clone <repository-url>
 cd kg-agent
-```
 
-2. Install dependencies:
-```bash
+# Install Python dependencies
 uv sync --all-groups
-```
 
-3. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+# Install dashboard dependencies
+cd dashboard && bun install && cd ..
 
-4. Install Playwright browsers:
-```bash
+# Install Playwright browsers
 playwright install chromium
 ```
 
-### Running Locally
-
-1. Start Redis (if not already running):
-```bash
-redis-server
-```
-
-2. Start the API server:
-```bash
-python main.py
-```
-
-3. In another terminal, start the Celery worker:
-```bash
-celery -A kg_agent.tasks.celery_app worker --loglevel=info
-```
-
-The API will be available at `http://localhost:8000`
-
-## API Usage
-
-### Authentication
-
-All API endpoints require an API key header:
-```
-X-API-Key: your_secret_key_here
-```
-
-### Single URL Crawl
+### 2. Configure Environment
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/crawl/single \
-  -H "X-API-Key: your_secret_key_here" \
+cp .env.example .env
+```
+
+Edit `.env` with your settings:
+
+```env
+# LM Studio (Local LLM)
+LLM_BASE_URL=http://localhost:1234/v1
+LLM_API_KEY=lm-studio
+LLM_MODEL_NAME=local-model
+
+# FalkorDB
+GRAPH_DRIVER=falkordb
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6380
+
+# ChromaDB
+CHROMA_PERSIST_DIR=./data/chroma_db
+CHROMA_COLLECTION_NAME=document_chunks
+
+# Embeddings
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
+
+### 3. Start Services
+
+**Option A: VS Code Tasks (Recommended)**
+
+Press `Ctrl+Shift+B` to run "Start All Services" which starts:
+
+- FalkorDB (Docker)
+- Backend API (FastAPI)
+- Dashboard (Next.js)
+
+**Option B: Manual Start**
+
+```bash
+# Terminal 1: Start FalkorDB
+docker compose -f docker-compose.dev.yml up
+
+# Terminal 2: Start Backend
+uv run python main.py
+
+# Terminal 3: Start Dashboard
+cd dashboard && bun run dev
+```
+
+### 4. Load a Model in LM Studio
+
+1. Open LM Studio
+2. Download/load a model (recommended: Qwen 2.5, Llama 3.2, or Mistral)
+3. Start the local server (Developer → Local Server → Start)
+4. Ensure it's running on `http://localhost:1234`
+
+### 5. Access the Application
+
+- **Dashboard**: http://localhost:3000
+- **API Docs**: http://localhost:8000/docs
+- **Health Check**: http://localhost:8000/health
+
+## Usage
+
+### Dashboard Features
+
+| Page          | Description                                         |
+| ------------- | --------------------------------------------------- |
+| **Home**      | Overview with stats, pipeline activity, and AI chat |
+| **Crawler**   | Start web crawls with configurable depth            |
+| **Upload**    | Upload documents (PDF, HTML, MD, TXT)               |
+| **Documents** | View and manage processed documents                 |
+| **Reprocess** | Run entity extraction on documents                  |
+| **Graph**     | Explore entities and relationships                  |
+| **Pipeline**  | Monitor processing status                           |
+
+### AI Agent
+
+The AI agent (powered by CopilotKit) can:
+
+- **Search knowledge base**: "What do we know about Python?"
+- **Get statistics**: "How many entities are in the graph?"
+- **Start crawls**: "Crawl https://example.com"
+- **Create entities**: "Create an entity for OpenAI"
+- **Delete data**: "Delete document xyz"
+
+### API Examples
+
+**Chat with Agent:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/agent/chat \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
+  -d '{"message": "What documents do we have?"}'
 ```
 
-### Batch Crawl
+**Search Knowledge Base:**
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/crawl/batch \
-  -H "X-API-Key: your_secret_key_here" \
+curl "http://localhost:8000/api/v1/agent/tools/search?query=machine+learning&search_type=hybrid"
+```
+
+**Upload Document:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/upload/file \
+  -F "file=@document.pdf"
+```
+
+**Start Entity Extraction:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/reprocess/start \
   -H "Content-Type: application/json" \
-  -d '{
-    "urls": [
-      "https://example.com",
-      "https://example.org"
-    ],
-    "max_concurrent": 3
-  }'
+  -d '{"doc_id": "your-doc-id"}'
 ```
 
-### Deep Crawl
+**Get Graph Stats:**
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/crawl/deep \
-  -H "X-API-Key: your_secret_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "start_url": "https://example.com",
-    "config": {
-      "max_depth": 2,
-      "max_pages": 50,
-      "same_domain_only": true
-    }
-  }'
-```
-
-### Check Job Status
-
-```bash
-curl -X GET http://localhost:8000/api/v1/crawl/job/{job_id} \
-  -H "X-API-Key: your_secret_key_here"
-```
-
-## Python Client
-
-```python
-import httpx
-import asyncio
-
-class CrawlerClient:
-    def __init__(self, base_url: str, api_key: str):
-        self.base_url = base_url
-        self.headers = {"X-API-Key": api_key}
-        self.client = httpx.AsyncClient()
-
-    async def crawl_single(self, url: str) -> dict:
-        response = await self.client.post(
-            f"{self.base_url}/api/v1/crawl/single",
-            json={"url": url},
-            headers=self.headers
-        )
-        response.raise_for_status()
-        return response.json()
-
-# Usage
-async def main():
-    client = CrawlerClient(
-        base_url="http://localhost:8000",
-        api_key="your_secret_key_here"
-    )
-
-    result = await client.crawl_single("https://example.com")
-    print(f"Title: {result['data']['metadata']['title']}")
-
-asyncio.run(main())
-```
-
-## Docker Deployment
-
-### Using Docker Compose
-
-1. Build and start services:
-```bash
-docker-compose up --build
-```
-
-2. The API will be available at `http://localhost:8000`
-
-### Manual Docker Build
-
-```bash
-# Build the image
-docker build -t kg-agent .
-
-# Run the container
-docker run -p 8000:8000 \
-  -v ./storage:/app/storage \
-  -v ./cache:/app/cache \
-  kg-agent
+curl http://localhost:8000/api/v1/reprocess/graph/stats
 ```
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `APP_ENV` | development | Application environment |
-| `DEBUG` | true | Enable debug mode |
-| `LOG_LEVEL` | INFO | Logging level |
-| `API_KEY_SECRET` | changeme | API authentication key |
-| `CRAWLER_MAX_CONCURRENT` | 5 | Maximum concurrent crawls |
-| `CRAWLER_TIMEOUT` | 30 | Crawl timeout in seconds |
-| `CELERY_BROKER_URL` | redis://localhost:6379/0 | Celery broker URL |
-| `CELERY_RESULT_BACKEND` | redis://localhost:6379/1 | Celery result backend |
+| Variable                 | Default                                | Description                              |
+| ------------------------ | -------------------------------------- | ---------------------------------------- |
+| **LLM Settings**         |                                        |                                          |
+| `LLM_BASE_URL`           | http://localhost:1234/v1               | LM Studio API endpoint                   |
+| `LLM_API_KEY`            | lm-studio                              | API key (any value for LM Studio)        |
+| `LLM_MODEL_NAME`         | local-model                            | Model name (LM Studio uses loaded model) |
+| **Graph Database**       |                                        |                                          |
+| `GRAPH_DRIVER`           | falkordb                               | Graph driver: `falkordb` or `neo4j`      |
+| `FALKORDB_HOST`          | localhost                              | FalkorDB host                            |
+| `FALKORDB_PORT`          | 6380                                   | FalkorDB port                            |
+| **Vector Store**         |                                        |                                          |
+| `CHROMA_PERSIST_DIR`     | ./data/chroma_db                       | ChromaDB storage path                    |
+| `CHROMA_COLLECTION_NAME` | document_chunks                        | Collection name                          |
+| **Embeddings**           |                                        |                                          |
+| `EMBEDDING_MODEL`        | sentence-transformers/all-MiniLM-L6-v2 | Embedding model                          |
+| **Crawler**              |                                        |                                          |
+| `CRAWLER_MAX_CONCURRENT` | 5                                      | Max concurrent crawls                    |
+| `CRAWLER_TIMEOUT`        | 30                                     | Crawl timeout (seconds)                  |
+
+### VS Code Tasks
+
+Available tasks in `.vscode/tasks.json`:
+
+| Task                         | Description                                   |
+| ---------------------------- | --------------------------------------------- |
+| `Start All Services`         | Start Docker, Backend, and Dashboard together |
+| `Start Dev (without Docker)` | Start Backend and Dashboard only              |
+| `Start Docker Services`      | Start FalkorDB and Redis                      |
+| `Start Backend API`          | Start FastAPI server                          |
+| `Start Dashboard`            | Start Next.js dashboard                       |
+| `Stop Docker Services`       | Stop all Docker containers                    |
+
+## Project Structure
+
+```
+kg-agent/
+├── src/kg_agent/
+│   ├── agent/           # AI Agent with RAG tools
+│   │   ├── kg_agent.py  # Pydantic AI agent
+│   │   └── tools.py     # Search & management tools
+│   ├── api/routes/      # FastAPI endpoints
+│   │   ├── agent.py     # Agent chat & tools
+│   │   ├── documents.py # Document management
+│   │   ├── reprocess.py # Entity extraction
+│   │   └── upload.py    # File uploads
+│   ├── services/
+│   │   ├── graphiti_service.py    # FalkorDB via Graphiti
+│   │   ├── vector_store.py        # ChromaDB operations
+│   │   ├── resumable_pipeline.py  # Entity extraction
+│   │   └── document_tracker.py    # Document metadata
+│   ├── crawler/         # Web crawling service
+│   └── core/            # Config, logging
+├── dashboard/           # Next.js frontend
+│   ├── app/             # Pages (App Router)
+│   ├── components/      # React components
+│   └── lib/             # API client, utilities
+├── docker-compose.dev.yml  # Development services
+├── main.py              # FastAPI entry point
+└── .env.example         # Environment template
+```
 
 ## Development
 
@@ -206,71 +301,73 @@ pytest
 pytest --cov=src/kg_agent
 
 # Run specific test
-pytest tests/test_crawler_service.py::test_crawler_service_initialization
+pytest tests/test_agent.py -v
 ```
 
 ### Code Quality
 
 ```bash
 # Format code
-black src/
+ruff format src/
 
 # Lint code
 ruff check src/
 
 # Type checking
-mypy src/
+ty check src/
 ```
 
-### API Documentation
-
-When running locally, visit `http://localhost:8000/docs` for interactive API documentation.
-
-## Architecture
-
-### Core Components
-
-- **Crawler Service** (`crawler/service.py`): Main crawling logic using Crawl4AI
-- **API Layer** (`api/`): FastAPI routes and request handling
-- **Task Processing** (`tasks/`): Celery-based async job processing
-- **Data Models** (`models/`): Pydantic schemas for validation
-- **Utilities** (`utils/`): Helper functions for URL processing, content cleaning
-
-### Data Flow
-
-1. API receives crawl request
-2. Request validated and queued as Celery task
-3. Worker processes task using CrawlerService
-4. Results stored and made available via API
-5. Client polls for completion status
-
-## Monitoring
-
-### Health Checks
+### Useful Scripts
 
 ```bash
-# Basic health check
-curl http://localhost:8000/health
+# Test Graphiti connection
+uv run python scripts/check_graphiti.py
 
-# Detailed health check
-curl http://localhost:8000/api/v1/health/detailed
+# Recover entities from failed job
+uv run python scripts/recover_entities.py
 ```
 
-### Logs
+## Troubleshooting
 
-Logs are written to `./logs/crawler.log` and stdout/stderr.
+### LM Studio Connection Error
 
-## Contributing
+- Ensure LM Studio is running with a model loaded
+- Check the server is started (Developer → Local Server)
+- Verify port matches `LLM_BASE_URL` (default: 1234)
 
-1. Fork the repository
-2. Create a feature branch
-3. Write tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
+### FalkorDB Connection Error
+
+- Start FalkorDB: `docker compose -f docker-compose.dev.yml up -d`
+- Check port 6380 is accessible
+- Wait for FalkorDB to fully initialize
+
+### Entity Extraction Not Saving
+
+- Check backend logs for errors
+- Ensure FalkorDB is running and connected
+- Verify LM Studio is responding (check for timeout errors)
+
+### Dashboard Not Updating
+
+- Check browser console for API errors
+- Verify backend is running on port 8000
+- Try refreshing with Ctrl+F5
+
+## Tech Stack
+
+- **Backend**: FastAPI, Pydantic, asyncio
+- **Knowledge Graph**: FalkorDB, Graphiti
+- **Vector Store**: ChromaDB, sentence-transformers
+- **LLM**: LM Studio (local), OpenAI-compatible API
+- **Agent**: Pydantic AI, CopilotKit
+- **Frontend**: Next.js 16, React, Tailwind CSS, shadcn/ui
+- **Crawler**: Crawl4AI, Playwright
+- **Package Manager**: uv (Python), bun (Node.js)
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the LICENSE file for
+details.
 
 ## Support
 
