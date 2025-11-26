@@ -1,9 +1,14 @@
 # KG Agent - Knowledge Graph ETL Pipeline with AI Agent
 
+[![Support this project](https://img.shields.io/badge/Support-PayPal-blue.svg)](https://paypal.me/safeappealnavigator)
+
 A comprehensive knowledge graph system that combines web crawling, document
 processing, entity extraction, and an AI-powered agent for intelligent querying.
 Built with FastAPI, Graphiti, FalkorDB, ChromaDB, and local LLM inference via LM
 Studio.
+
+> 💖 **If you find this project useful, please consider
+> [supporting development](https://paypal.me/safeappealnavigator)!**
 
 ## Features
 
@@ -364,11 +369,33 @@ uv run python scripts/recover_entities.py
 - **Crawler**: Crawl4AI, Playwright
 - **Package Manager**: uv (Python), bun (Node.js)
 
+---
+
+> 🙏 **Enjoying KG Agent?** >
+> [Support the project on PayPal](https://paypal.me/safeappealnavigator) to help
+> with ongoing development!
+
+## Support the Project
+
+If you find KG Agent useful, please consider supporting its development:
+
+[![Support on PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=for-the-badge&logo=paypal)](https://paypal.me/safeappealnavigator)
+
+**[☕ Buy me a coffee via PayPal](https://paypal.me/safeappealnavigator)**
+
+Your support helps maintain and improve this project!
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for
 details.
 
-## Support
+## Help & Questions
 
 For questions and support, please open an issue on GitHub.
+
+---
+
+<p align="center">
+  Made with ❤️ | <a href="https://paypal.me/safeappealnavigator">Support this project</a>
+</p>
