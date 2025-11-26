@@ -191,6 +191,38 @@ The AI agent (powered by CopilotKit) can:
 - **Start crawls**: "Crawl https://example.com"
 - **Create entities**: "Create an entity for OpenAI"
 - **Delete data**: "Delete document xyz"
+- **Remember conversations**: All chats are saved to the knowledge graph
+- **Recall past discussions**: "What have we talked about before?"
+- **Learn about you**: "Remember that I prefer Python"
+
+### Conversation Memory
+
+The agent **continuously learns** from your conversations:
+
+- **Auto-save**: Every conversation is automatically saved to FalkorDB
+- **User profile**: The agent builds a profile of your preferences over time
+- **Context recall**: Past discussions are retrieved to provide better answers
+- **Persistent memory**: Knowledge persists across sessions
+
+**Teach the agent about yourself:**
+
+```bash
+# Store a preference
+curl -X POST http://localhost:8000/api/v1/agent/memory/learn/preference \
+  -H "Content-Type: application/json" \
+  -d '{"key": "favorite_language", "value": "Python"}'
+
+# Store a fact
+curl -X POST http://localhost:8000/api/v1/agent/memory/learn/fact \
+  -H "Content-Type: application/json" \
+  -d '{"fact": "User is a software developer", "category": "work"}'
+
+# View your profile
+curl http://localhost:8000/api/v1/agent/memory/profile
+
+# Search past conversations
+curl "http://localhost:8000/api/v1/agent/memory/recall?query=Python+programming"
+```
 
 ### API Examples
 

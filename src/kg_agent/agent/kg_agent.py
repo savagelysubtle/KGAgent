@@ -556,6 +556,19 @@ async def add_user_info(
             description="The current user of this system",
         )
 
+        # Also store in conversation memory for better recall
+        try:
+            from ..services.conversation_memory import get_conversation_memory
+            memory = get_conversation_memory()
+            await memory.initialize()
+            await memory.learn_user_preference(
+                preference_key=property_name,
+                preference_value=property_value,
+                source="agent_conversation"
+            )
+        except Exception as mem_err:
+            logger.debug(f"Could not store in memory: {mem_err}")
+
         if result.success:
             output = "✅ **User Info Added**\n\n"
             output += f"- Property: **{property_name}**\n"
@@ -569,6 +582,183 @@ async def add_user_info(
     except Exception as e:
         logger.error(f"Failed to add user info: {e}")
         return f"Failed to add user info: {str(e)}"
+
+
+@kg_agent.tool
+async def recall_past_conversations(
+    ctx: RunContext[AgentDependencies],
+    query: str,
+    limit: int = 5
+) -> str:
+    """
+    Search through past conversations to find relevant discussions.
+
+    Use this when the user asks about something you've discussed before,
+    or when you need context from previous chats.
+
+    Args:
+        query: What to search for in past conversations
+        limit: Maximum number of results to return
+
+    Returns:
+        A summary of relevant past conversations
+
+    Examples:
+        - recall_past_conversations("Python programming")
+        - recall_past_conversations("what did we discuss yesterday")
+        - recall_past_conversations("user preferences")
+    """
+    try:
+        from ..services.conversation_memory import get_conversation_memory
+
+        memory = get_conversation_memory()
+        await memory.initialize()
+
+        context = await memory.recall_relevant_context(query, limit=limit)
+
+        output = "🔍 **Past Conversation Search**\n\n"
+        output += f"Query: *{query}*\n\n"
+
+        # Show related conversations
+        related_convs = context.get("related_conversations", [])
+        if related_convs:
+            output += f"**Related Conversations ({len(related_convs)} found):**\n"
+            for conv in related_convs:
+                output += f"- **{conv.get('title', 'Untitled')}** "
+                output += f"({conv.get('message_count', 0)} messages)\n"
+                if conv.get('summary'):
+                    output += f"  Summary: {conv['summary']}\n"
+            output += "\n"
+        else:
+            output += "No related conversations found.\n\n"
+
+        # Show graph results
+        graph_results = context.get("graph_results", {})
+        if graph_results.get("nodes") or graph_results.get("edges"):
+            output += "**Related Knowledge from Graph:**\n"
+            for node in graph_results.get("nodes", [])[:3]:
+                output += f"- {node.get('name', 'Unknown')}: {node.get('summary', '')[:100]}\n"
+            output += "\n"
+
+        # Show user profile info
+        profile = context.get("user_profile", {})
+        if profile.get("preferences"):
+            output += "**Your Known Preferences:**\n"
+            for key, val in list(profile["preferences"].items())[:5]:
+                if isinstance(val, dict):
+                    output += f"- {key}: {val.get('value', val)}\n"
+                else:
+                    output += f"- {key}: {val}\n"
+
+        return output
+
+    except Exception as e:
+        logger.error(f"Failed to recall past conversations: {e}")
+        return f"Failed to search past conversations: {str(e)}"
+
+
+@kg_agent.tool
+async def remember_about_user(
+    ctx: RunContext[AgentDependencies],
+    fact: str,
+    category: str = "general"
+) -> str:
+    """
+    Store a fact about the user that was learned during conversation.
+
+    Use this proactively when the user shares information about themselves
+    that might be useful to remember for future conversations.
+
+    Args:
+        fact: The fact to remember (e.g., "User is a Python developer")
+        category: Category of the fact (general, work, interests, skills, preferences)
+
+    Returns:
+        Confirmation that the fact was stored
+
+    Examples:
+        - remember_about_user("User prefers dark mode interfaces", "preferences")
+        - remember_about_user("User works on AI projects", "work")
+        - remember_about_user("User's name is Steve", "general")
+    """
+    try:
+        from ..services.conversation_memory import get_conversation_memory
+
+        memory = get_conversation_memory()
+        await memory.initialize()
+
+        success = await memory.learn_about_user(fact=fact, category=category)
+
+        if success:
+            output = "✅ **Fact Remembered**\n\n"
+            output += f"- Fact: *{fact}*\n"
+            output += f"- Category: {category}\n"
+            output += f"\nI'll remember this for our future conversations!"
+        else:
+            output = "❌ Failed to store this fact."
+
+        return output
+
+    except Exception as e:
+        logger.error(f"Failed to remember about user: {e}")
+        return f"Failed to remember fact: {str(e)}"
+
+
+@kg_agent.tool
+async def get_user_profile_summary(ctx: RunContext[AgentDependencies]) -> str:
+    """
+    Get a summary of what the agent knows about the user.
+
+    Use this to check what information has been stored about the user,
+    or when the user asks what you know about them.
+
+    Returns:
+        A summary of the user's profile and preferences
+    """
+    try:
+        from ..services.conversation_memory import get_conversation_memory
+
+        memory = get_conversation_memory()
+        await memory.initialize()
+
+        profile = memory.get_user_profile()
+
+        output = "👤 **User Profile Summary**\n\n"
+
+        if profile.name:
+            output += f"**Name:** {profile.name}\n"
+
+        output += f"**Total Interactions:** {profile.interaction_count}\n"
+
+        if profile.first_interaction:
+            output += f"**First Chat:** {profile.first_interaction[:10]}\n"
+
+        if profile.last_interaction:
+            output += f"**Last Chat:** {profile.last_interaction[:10]}\n"
+
+        output += "\n"
+
+        if profile.preferences:
+            output += "**Known Preferences:**\n"
+            for key, val in profile.preferences.items():
+                if isinstance(val, dict):
+                    output += f"- {key}: {val.get('value', val)}\n"
+                else:
+                    output += f"- {key}: {val}\n"
+            output += "\n"
+        else:
+            output += "*No preferences stored yet.*\n\n"
+
+        if profile.topics_of_interest:
+            output += "**Topics of Interest:**\n"
+            for topic in profile.topics_of_interest:
+                output += f"- {topic}\n"
+
+        return output
+
+    except Exception as e:
+        logger.error(f"Failed to get user profile: {e}")
+        return f"Failed to get user profile: {str(e)}"
 
 
 def _format_search_results(results: List[SearchResult], title: str) -> str:
