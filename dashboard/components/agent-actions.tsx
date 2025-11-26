@@ -139,7 +139,7 @@ Vector Store (ChromaDB):
 - Collection: ${stats.vector_store.collection_name}
 - Total Chunks: ${stats.vector_store.total_chunks}
 
-Knowledge Graph (Neo4j):
+Knowledge Graph (FalkorDB/Graphiti):
 - Connected: ${stats.graph_database.connected ? '✅ Yes' : '❌ No'}
 - Total Nodes: ${stats.graph_database.total_nodes}
 - Total Edges: ${stats.graph_database.total_edges}
@@ -155,7 +155,7 @@ Knowledge Graph (Neo4j):
   // Action to check agent health
   useCopilotAction({
     name: "checkAgentHealth",
-    description: "Check the health status of the AI agent and its connections to LM Studio, ChromaDB, and Neo4j",
+    description: "Check the health status of the AI agent and its connections to LM Studio, ChromaDB, and FalkorDB",
     parameters: [],
     handler: async () => {
       try {
@@ -275,7 +275,7 @@ Components:
   // Action to delete a document
   useCopilotAction({
     name: "deleteDocument",
-    description: "Delete a specific document and its associated data from ChromaDB and Neo4j",
+    description: "Delete a specific document and its associated data from ChromaDB and FalkorDB",
     parameters: [
       {
         name: "documentId",

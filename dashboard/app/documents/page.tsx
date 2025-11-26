@@ -10,7 +10,7 @@ export default function DocumentsPage() {
           Document Management
         </h1>
         <p className="text-gray-400 mt-2">
-          View, manage, and delete ingested documents and their data across ChromaDB and Neo4j
+          View, manage, and delete ingested documents and their data across ChromaDB and FalkorDB
         </p>
       </div>
       <DocumentManager />

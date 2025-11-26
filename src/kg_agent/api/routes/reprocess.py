@@ -12,6 +12,7 @@ from ...services.reprocessing_pipeline import (
 )
 from ...services.resumable_pipeline import get_resumable_pipeline
 from ...services.processing_job_tracker import get_job_tracker, JobStatus
+from ...services.graphiti_service import get_graphiti_service
 from ...models.entity import (
     ReprocessingOptions,
     ReprocessingResult,
@@ -95,7 +96,7 @@ async def reprocess_single_document(
     1. Load the document's chunks from ChromaDB
     2. Use LLM to extract entities and relationships from each chunk
     3. Deduplicate and merge entities across chunks
-    4. Update the Neo4j knowledge graph with extracted entities
+    4. Update the FalkorDB knowledge graph with extracted entities
 
     Returns detailed statistics about the extraction.
     """
@@ -182,51 +183,69 @@ async def get_entity_relationships(entity_name: str):
 @router.get("/entities/all")
 async def list_all_entities(
     limit: int = Query(100, ge=1, le=1000),
-    entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+    entity_type: Optional[str] = Query(None, description="Filter by entity type (label)"),
 ):
     """
-    List all entities in the knowledge graph.
+    List all entities in the knowledge graph (via Graphiti/FalkorDB).
     """
-    pipeline = get_reprocessing_pipeline()
-
-    await pipeline.graph_builder.initialize()
-
-    if not pipeline.graph_builder.driver:
-        return {"entities": [], "count": 0, "message": "Neo4j not available"}
+    graphiti = get_graphiti_service()
 
     try:
-        with pipeline.graph_builder.driver.session() as session:
-            if entity_type:
-                result = session.run(
-                    """
-                    MATCH (e:Entity {type: $type})
-                    RETURN e.name as name, e.type as type, e.description as description,
-                           e.confidence as confidence
-                    LIMIT $limit
-                    """,
-                    {"type": entity_type, "limit": limit},
-                )
-            else:
-                result = session.run(
-                    """
-                    MATCH (e:Entity)
-                    RETURN e.name as name, e.type as type, e.description as description,
-                           e.confidence as confidence
-                    LIMIT $limit
-                    """,
-                    {"limit": limit},
-                )
+        # Initialize if needed
+        if not graphiti._initialized:
+            await graphiti.initialize()
 
-            entities = []
-            for record in result:
+        if not graphiti._graphiti:
+            return {"entities": [], "count": 0, "message": "Graph database not available"}
+
+        # Query FalkorDB for entities
+        driver = graphiti._graphiti.driver
+
+        # FalkorDB driver uses **kwargs for parameters, not a dict
+        # Also, we need to embed the limit directly in the query for FalkorDB
+        if entity_type:
+            # Filter by label - use string interpolation for FalkorDB compatibility
+            query = f"""
+                MATCH (n:Entity)
+                WHERE '{entity_type}' IN labels(n)
+                RETURN n.name as name, labels(n) as labels, n.summary as summary, n.uuid as uuid
+                LIMIT {limit}
+            """
+        else:
+            query = f"""
+                MATCH (n:Entity)
+                RETURN n.name as name, labels(n) as labels, n.summary as summary, n.uuid as uuid
+                LIMIT {limit}
+            """
+
+        # FalkorDB execute_query returns (records, header, None) tuple
+        result = await driver.execute_query(query)
+
+        # Handle the result format - it's a tuple (records, header, _)
+        records = []
+        if result and isinstance(result, tuple) and len(result) > 0:
+            records = result[0] if result[0] else []
+        elif result and isinstance(result, list):
+            records = result
+
+        entities = []
+        for record in records:
+            if isinstance(record, dict):
+                labels = record.get("labels", [])
+                # Get the most specific label (not 'Entity')
+                entity_labels = [l for l in labels if l != "Entity"] if labels else []
+                entity_type_name = entity_labels[0] if entity_labels else "Entity"
+
                 entities.append({
-                    "name": record["name"],
-                    "type": record["type"],
-                    "description": record["description"],
-                    "confidence": record["confidence"],
+                    "name": record.get("name", "Unknown"),
+                    "type": entity_type_name,
+                    "labels": labels or [],
+                    "description": record.get("summary", ""),
+                    "uuid": record.get("uuid"),
+                    "confidence": 1.0,  # Graphiti doesn't track confidence
                 })
 
-            return {"entities": entities, "count": len(entities)}
+        return {"entities": entities, "count": len(entities)}
 
     except Exception as e:
         logger.error(f"Failed to list entities: {e}")
@@ -236,63 +255,91 @@ async def list_all_entities(
 @router.get("/graph/stats")
 async def get_entity_graph_stats():
     """
-    Get statistics about the entity knowledge graph.
+    Get statistics about the entity knowledge graph (via Graphiti/FalkorDB).
     """
-    pipeline = get_reprocessing_pipeline()
-
-    await pipeline.graph_builder.initialize()
-
-    if not pipeline.graph_builder.driver:
-        return {
-            "status": "unavailable",
-            "message": "Neo4j not available",
-        }
+    graphiti = get_graphiti_service()
 
     try:
-        with pipeline.graph_builder.driver.session() as session:
-            # Count entities by type
-            type_result = session.run(
-                """
-                MATCH (e:Entity)
-                RETURN e.type as type, count(e) as count
-                ORDER BY count DESC
-                """
-            )
-            entities_by_type = {r["type"]: r["count"] for r in type_result}
+        # Get basic stats from GraphitiService
+        stats = await graphiti.get_stats()
 
-            # Count total entities
-            total_entities = sum(entities_by_type.values())
-
-            # Count relationships by type
-            rel_result = session.run(
-                """
-                MATCH ()-[r:RELATES_TO]->()
-                RETURN r.type as type, count(r) as count
-                ORDER BY count DESC
-                """
-            )
-            relationships_by_type = {r["type"]: r["count"] for r in rel_result}
-
-            # Count total relationships
-            total_relationships = sum(relationships_by_type.values())
-
-            # Count documents with entities
-            doc_result = session.run(
-                """
-                MATCH (d:Document)-[:MENTIONS]->(:Entity)
-                RETURN count(DISTINCT d) as count
-                """
-            )
-            docs_with_entities = doc_result.single()["count"]
-
+        if stats.get("status") == "error":
             return {
-                "status": "success",
-                "total_entities": total_entities,
-                "total_relationships": total_relationships,
-                "documents_with_entities": docs_with_entities,
-                "entities_by_type": entities_by_type,
-                "relationships_by_type": relationships_by_type,
+                "status": "unavailable",
+                "message": stats.get("error", "Graph database not available"),
             }
+
+        # Get entity type distribution
+        entities_by_type = {}
+        relationships_by_type = {}
+
+        if graphiti._graphiti:
+            driver = graphiti._graphiti.driver
+
+            # Count entities by label - FalkorDB compatible query
+            try:
+                # Use a simpler query that FalkorDB can handle
+                type_result = await driver.execute_query("""
+                    MATCH (n:Entity)
+                    RETURN labels(n) as labels
+                """)
+
+                # Handle tuple result format
+                records = []
+                if type_result and isinstance(type_result, tuple) and len(type_result) > 0:
+                    records = type_result[0] if type_result[0] else []
+                elif type_result and isinstance(type_result, list):
+                    records = type_result
+
+                # Count labels manually
+                label_counts: Dict[str, int] = {}
+                for record in records:
+                    if isinstance(record, dict):
+                        labels = record.get("labels", [])
+                        if labels:
+                            for label in labels:
+                                if label and label != "Entity":
+                                    label_counts[label] = label_counts.get(label, 0) + 1
+
+                entities_by_type = label_counts
+            except Exception as e:
+                logger.warning(f"Failed to get entity types: {e}")
+
+            # Count relationships by name
+            try:
+                rel_result = await driver.execute_query("""
+                    MATCH ()-[r:RELATES_TO]->()
+                    RETURN r.name as type
+                """)
+
+                # Handle tuple result format
+                records = []
+                if rel_result and isinstance(rel_result, tuple) and len(rel_result) > 0:
+                    records = rel_result[0] if rel_result[0] else []
+                elif rel_result and isinstance(rel_result, list):
+                    records = rel_result
+
+                # Count relationship types manually
+                rel_counts: Dict[str, int] = {}
+                for record in records:
+                    if isinstance(record, dict):
+                        type_name = record.get("type")
+                        if type_name:
+                            rel_counts[type_name] = rel_counts.get(type_name, 0) + 1
+
+                relationships_by_type = rel_counts
+            except Exception as e:
+                logger.warning(f"Failed to get relationship types: {e}")
+
+        return {
+            "status": "success",
+            "total_entities": stats.get("total_entities", 0),
+            "total_relationships": stats.get("total_relationships", 0),
+            "total_episodes": stats.get("total_episodes", 0),
+            "documents_with_entities": stats.get("total_episodes", 0),  # Episodes ~ documents
+            "entities_by_type": entities_by_type,
+            "relationships_by_type": relationships_by_type,
+        }
 
     except Exception as e:
         logger.error(f"Failed to get graph stats: {e}")

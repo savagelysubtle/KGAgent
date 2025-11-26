@@ -272,7 +272,7 @@ class ReprocessingPipeline:
         options: ReprocessingOptions,
     ) -> Dict[str, Any]:
         """
-        Update Neo4j graph with extracted entities and relationships.
+        Update FalkorDB graph with extracted entities and relationships.
 
         Args:
             doc_id: Document ID being processed
@@ -286,7 +286,7 @@ class ReprocessingPipeline:
         await self.graph_builder.initialize()
 
         if not self.graph_builder.driver:
-            logger.warning("Neo4j not available, skipping graph update")
+            logger.warning("FalkorDB not available, skipping graph update")
             return {"nodes_created": 0, "edges_created": 0}
 
         nodes_created = 0
@@ -371,7 +371,7 @@ class ReprocessingPipeline:
 
     async def get_document_entities(self, doc_id: str) -> List[Dict[str, Any]]:
         """
-        Get all entities associated with a document from Neo4j.
+        Get all entities associated with a document from FalkorDB.
 
         Args:
             doc_id: Document ID

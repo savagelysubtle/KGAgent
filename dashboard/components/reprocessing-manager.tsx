@@ -153,6 +153,19 @@ export function ReprocessingManager() {
   const [lastResult, setLastResult] = useState<ReprocessingResult | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
 
+  // Fetch processing jobs FIRST (needed for polling intervals)
+  const { data: jobsData, isLoading: jobsLoading } = useQuery({
+    queryKey: ["processing-jobs"],
+    queryFn: async () => {
+      const response = await reprocessApi.listJobs({});
+      return response.data;
+    },
+    refetchInterval: 3000, // Refresh every 3 seconds
+  });
+
+  const jobs = jobsData?.jobs || [];
+  const hasRunningJobs = jobs.some((j: ProcessingJob) => j.status === "running");
+
   // Fetch documents
   const { data: documentsData, isLoading: docsLoading } = useQuery({
     queryKey: ["documents"],
@@ -163,24 +176,23 @@ export function ReprocessingManager() {
     refetchInterval: 5000,
   });
 
-  // Fetch graph stats
   const { data: graphStats, isLoading: statsLoading } = useQuery({
     queryKey: ["reprocess-graph-stats"],
     queryFn: async () => {
       const response = await reprocessApi.getGraphStats();
       return response.data as GraphStats;
     },
-    refetchInterval: 10000,
+    refetchInterval: hasRunningJobs ? 5000 : 60000, // 5s when processing, 60s otherwise
   });
 
-  // Fetch all entities
+  // Fetch all entities - poll every 60 seconds, or every 10 seconds if there are running jobs
   const { data: entitiesData, isLoading: entitiesLoading } = useQuery({
     queryKey: ["entities"],
     queryFn: async () => {
       const response = await reprocessApi.listEntities({ limit: 100 });
       return response.data;
     },
-    refetchInterval: 10000,
+    refetchInterval: hasRunningJobs ? 10000 : 60000, // 10s when processing, 60s otherwise
   });
 
   // Reprocess single document mutation
@@ -237,16 +249,6 @@ export function ReprocessingManager() {
     enabled: !!selectedEntity,
   });
 
-  // Fetch processing jobs
-  const { data: jobsData, isLoading: jobsLoading } = useQuery({
-    queryKey: ["processing-jobs"],
-    queryFn: async () => {
-      const response = await reprocessApi.listJobs({});
-      return response.data;
-    },
-    refetchInterval: 3000, // Refresh every 3 seconds
-  });
-
   // Start job mutation
   const startJobMutation = useMutation({
     mutationFn: async (docId: string) => {
@@ -301,8 +303,6 @@ export function ReprocessingManager() {
       queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
     },
   });
-
-  const jobs = jobsData?.jobs || [];
 
   const documents = documentsData?.documents || [];
   const entities = entitiesData?.entities || [];
@@ -554,9 +554,14 @@ export function ReprocessingManager() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
-                    queryClient.refetchQueries({ queryKey: ["processing-jobs"] });
+                  onClick={async () => {
+                    // Force refetch all data
+                    await Promise.all([
+                      queryClient.refetchQueries({ queryKey: ["processing-jobs"] }),
+                      queryClient.refetchQueries({ queryKey: ["documents"] }),
+                      queryClient.refetchQueries({ queryKey: ["entities"] }),
+                      queryClient.refetchQueries({ queryKey: ["reprocess-graph-stats"] }),
+                    ]);
                   }}
                   className="border-purple-500/30"
                 >

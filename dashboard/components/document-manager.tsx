@@ -68,6 +68,10 @@ interface DocumentStats {
   by_source_type: Record<string, number>;
   total_vectors: number;
   total_graph_nodes: number;
+  total_graph_edges?: number;
+  total_episodes?: number;
+  chromadb_connected?: boolean;
+  falkordb_connected?: boolean;
 }
 
 const statusIcons: Record<string, React.ReactNode> = {
@@ -185,9 +189,19 @@ export function DocumentManager() {
     },
     onSuccess: (response) => {
       const result = response.data;
+      const graphCleared = result.graph_cleared || {};
+      const nodesDeleted = graphCleared.nodes_deleted || 0;
+      const edgesDeleted = graphCleared.edges_deleted || 0;
+
       toast.success(
-        `Cleared all data: ${result.documents_cleared} documents, ${result.vectors_cleared} vectors`
+        `Cleared all data: ${result.documents_cleared} documents, ${result.vectors_cleared} vectors, ${nodesDeleted} graph nodes, ${edgesDeleted} edges`
       );
+
+      // Show any errors that occurred
+      if (result.errors && result.errors.length > 0) {
+        toast.warning(`Some errors occurred: ${result.errors.join(', ')}`);
+      }
+
       queryClient.invalidateQueries({ queryKey: ["documents"] });
       queryClient.invalidateQueries({ queryKey: ["document-stats"] });
     },
@@ -252,26 +266,42 @@ export function DocumentManager() {
 
         <Card className="bg-black/40 border-purple-500/20 backdrop-blur-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400">
-              Total Vectors
+            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+              ChromaDB Vectors
+              {stats?.chromadb_connected !== undefined && (
+                <span className={`w-2 h-2 rounded-full ${stats.chromadb_connected ? 'bg-green-500' : 'bg-red-500'}`} />
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold text-blue-400">
-              {isLoadingStats ? "..." : stats?.total_vectors || 0}
+              {isLoadingStats ? "..." : stats?.total_vectors?.toLocaleString() || 0}
             </p>
           </CardContent>
         </Card>
 
         <Card className="bg-black/40 border-purple-500/20 backdrop-blur-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-400">
-              Graph Nodes
+            <CardTitle className="text-sm font-medium text-gray-400 flex items-center gap-2">
+              FalkorDB Graph
+              {stats?.falkordb_connected !== undefined && (
+                <span className={`w-2 h-2 rounded-full ${stats.falkordb_connected ? 'bg-green-500' : 'bg-red-500'}`} />
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold text-green-400">
-              {isLoadingStats ? "..." : stats?.total_graph_nodes || 0}
+              {isLoadingStats ? "..." : (
+                <>
+                  {stats?.total_graph_nodes?.toLocaleString() || 0}
+                  <span className="text-sm text-gray-400 ml-1">nodes</span>
+                  {stats?.total_graph_edges !== undefined && (
+                    <span className="text-sm text-purple-400 ml-2">
+                      {stats.total_graph_edges.toLocaleString()} edges
+                    </span>
+                  )}
+                </>
+              )}
             </p>
           </CardContent>
         </Card>

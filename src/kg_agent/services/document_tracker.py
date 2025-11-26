@@ -55,7 +55,7 @@ class TrackedDocument:
 class DocumentTrackerService:
     """
     SQLite-based service for tracking ingested documents.
-    Provides CRUD operations and links to ChromaDB and Neo4j data.
+    Provides CRUD operations and links to ChromaDB and FalkorDB data.
     """
 
     def __init__(self, db_path: str = None):
@@ -112,7 +112,7 @@ class DocumentTrackerService:
                 )
             """)
 
-            # Document-Graph mapping table (Neo4j node IDs)
+            # Document-Graph mapping table (FalkorDB node IDs)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS document_graph_nodes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,7 +343,7 @@ class DocumentTrackerService:
         logger.info(f"Added {len(vector_ids)} vector IDs to document {doc_id}")
 
     def add_graph_node_ids(self, doc_id: str, node_ids: List[str], node_type: str = "Document"):
-        """Add graph node IDs (Neo4j) associated with a document."""
+        """Add graph node IDs (FalkorDB) associated with a document."""
         now = datetime.utcnow().isoformat()
 
         with self._get_connection() as conn:

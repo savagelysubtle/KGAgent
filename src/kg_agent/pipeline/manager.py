@@ -11,7 +11,7 @@ from ..parser.service import ParserService
 from ..chunker.service import ChunkerService
 from ..services.embedder import EmbedderService
 from ..services.vector_store import VectorStoreService
-from ..services.graph_builder import GraphBuilderService
+from ..services.graphiti_service import get_graphiti_service
 from ..services.document_tracker import get_document_tracker, DocumentStatus, DocumentSource
 from ..core.logging import logger
 
@@ -27,7 +27,7 @@ class PipelineManager:
         self.chunker = ChunkerService()
         self.embedder = EmbedderService()
         self.vector_store = VectorStoreService()
-        self.graph_builder = GraphBuilderService()
+        self.graphiti_service = get_graphiti_service()
         self.document_tracker = get_document_tracker()
 
     async def run_pipeline(self, urls: List[str], job_id: str = None) -> Dict[str, Any]:
@@ -168,20 +168,36 @@ class PipelineManager:
                 logger.info("Step 6: Storing vectors in ChromaDB...")
                 self.vector_store.add_chunks(all_chunks)
 
-            # 6. Build Knowledge Graph
+            # 6. Build Knowledge Graph via Graphiti
             graph_node_ids = []
             if all_chunks:
-                logger.info("Step 7: Building Knowledge Graph in Neo4j...")
-                # Initialize graph builder if needed
-                await self.graph_builder.initialize()
+                logger.info("Step 7: Building Knowledge Graph in FalkorDB via Graphiti...")
+                # Initialize Graphiti service
+                await self.graphiti_service.initialize()
 
-                # Build graph
-                graph_result = await self.graph_builder.build_from_chunks(
-                    all_chunks,
-                    episode_name=f"job_{job_id}"
-                )
-                logger.info(f"Graph build result: {graph_result}")
-                graph_node_ids = graph_result.get("node_ids", []) if isinstance(graph_result, dict) else []
+                # Build graph by adding chunks as episodes
+                from datetime import timezone
+
+                # Combine chunks into episodes (batch by source document)
+                episode_content = "\n\n".join([chunk.text for chunk in all_chunks[:50]])  # Limit for initial processing
+
+                try:
+                    result = await self.graphiti_service.add_episode(
+                        content=episode_content,
+                        name=f"Crawl job {job_id}",
+                        source_description=f"Web crawl job {job_id}",
+                        reference_time=datetime.now(timezone.utc),
+                        source_type="text",
+                    )
+
+                    if result:
+                        # Result is a dict from GraphitiService
+                        graph_node_ids = [e.get("uuid") for e in result.get("entities", [])]
+                        logger.info(f"Graph build result: {result.get('nodes_created', 0)} nodes, {result.get('edges_created', 0)} edges")
+                    else:
+                        logger.warning("No graph results returned from Graphiti")
+                except Exception as e:
+                    logger.warning(f"Graph building failed: {e}")
 
             # 7. Update document tracker with results
             for doc_id in tracked_doc_ids:
@@ -359,17 +375,35 @@ class PipelineManager:
                 self.vector_store.add_chunks(all_chunks)
                 vector_ids_stored = [chunk.id for chunk in all_chunks]
 
-            # 4. Build Knowledge Graph
+            # 4. Build Knowledge Graph via Graphiti
             graph_node_ids = []
             if all_chunks:
-                logger.info("Step 5: Building Knowledge Graph in Neo4j...")
-                await self.graph_builder.initialize()
-                graph_result = await self.graph_builder.build_from_chunks(
-                    all_chunks,
-                    episode_name=f"upload_{job_id}"
-                )
-                logger.info(f"Graph build result: {graph_result}")
-                graph_node_ids = graph_result.get("node_ids", []) if isinstance(graph_result, dict) else []
+                logger.info("Step 5: Building Knowledge Graph in FalkorDB via Graphiti...")
+                await self.graphiti_service.initialize()
+
+                # Build graph by adding chunks as episodes
+                from datetime import timezone
+
+                # Combine chunks into episodes (batch by source document)
+                episode_content = "\n\n".join([chunk.text for chunk in all_chunks[:50]])  # Limit for initial processing
+
+                try:
+                    result = await self.graphiti_service.add_episode(
+                        content=episode_content,
+                        name=f"Upload job {job_id}",
+                        source_description=f"File upload job {job_id}",
+                        reference_time=datetime.now(timezone.utc),
+                        source_type="text",
+                    )
+
+                    if result:
+                        # Result is a dict from GraphitiService
+                        graph_node_ids = [e.get("uuid") for e in result.get("entities", [])]
+                        logger.info(f"Graph build result: {result.get('nodes_created', 0)} nodes, {result.get('edges_created', 0)} edges")
+                    else:
+                        logger.warning("No graph results returned from Graphiti")
+                except Exception as e:
+                    logger.warning(f"Graph building failed: {e}")
 
             # 5. Update document tracker with results
             for doc_id in tracked_doc_ids:

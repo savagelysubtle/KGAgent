@@ -223,7 +223,7 @@ class RAGTools:
                             "valid_at": edge.get("valid_at"),
                         }
                     ))
-                
+
                 # Add nodes (entities) as results
                 for node in result.get("nodes", []):
                     search_results.append(SearchResult(
@@ -595,7 +595,7 @@ class RAGTools:
             props_str = ""
             if properties:
                 props_str = ". ".join([f"{k}: {v}" for k, v in properties.items()])
-            
+
             content = f"{name} is a {entity_type}."
             if description:
                 content += f" {description}"
@@ -670,7 +670,7 @@ class RAGTools:
             props_str = ""
             if properties:
                 props_str = ". ".join([f"{k}: {v}" for k, v in properties.items()])
-            
+
             # Convert relationship type to natural language
             rel_phrase = relationship_type.lower().replace("_", " ")
             content = f"{source_entity} {rel_phrase} {target_entity}."

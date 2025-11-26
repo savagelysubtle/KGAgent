@@ -15,6 +15,7 @@ from ...services.document_tracker import (
 )
 from ...services.vector_store import get_vector_store, VectorStoreService
 from ...services.graph_builder import get_graph_builder, GraphBuilderService
+from ...services.graphiti_service import get_graphiti_service
 
 router = APIRouter()
 
@@ -90,10 +91,38 @@ async def list_documents(
 
 @router.get("/stats", response_model=Dict[str, Any])
 async def get_document_stats():
-    """Get document tracking statistics."""
+    """Get document tracking statistics with live database counts."""
     try:
         tracker = get_document_tracker()
         stats = tracker.get_stats()
+
+        # Get live vector count from ChromaDB
+        try:
+            vector_store = get_vector_store()
+            if vector_store:
+                stats["total_vectors"] = vector_store.count()
+                stats["chromadb_connected"] = True
+        except Exception as e:
+            logger.warning(f"Failed to get ChromaDB count: {e}")
+            stats["chromadb_connected"] = False
+
+        # Get live graph node count from FalkorDB/Graphiti
+        try:
+            from ...services.graphiti_service import get_graphiti_service
+            graphiti = get_graphiti_service()
+            if graphiti:
+                await graphiti.initialize()
+                graph_stats = await graphiti.get_stats()
+                if graph_stats.get("status") == "success":
+                    stats["total_graph_nodes"] = graph_stats.get("total_entities", 0)
+                    stats["total_graph_edges"] = graph_stats.get("total_relationships", 0)
+                    stats["total_episodes"] = graph_stats.get("total_episodes", 0)
+                    stats["falkordb_connected"] = True
+                else:
+                    stats["falkordb_connected"] = False
+        except Exception as e:
+            logger.warning(f"Failed to get FalkorDB stats: {e}")
+            stats["falkordb_connected"] = False
 
         return {
             "status": "success",
@@ -194,9 +223,14 @@ async def update_document(doc_id: str, request: DocumentUpdateRequest):
 
 
 @router.delete("/{doc_id}", response_model=Dict[str, Any])
-async def delete_document(doc_id: str, request: DeleteDocumentRequest):
+async def delete_document(
+    doc_id: str,
+    delete_vectors: bool = Query(True, description="Delete vectors from ChromaDB"),
+    delete_graph_nodes: bool = Query(True, description="Delete nodes from graph database"),
+    soft_delete: bool = Query(False, description="Soft delete (mark as deleted) instead of hard delete"),
+):
     """
-    Delete a document and optionally its associated data from ChromaDB and Neo4j.
+    Delete a document and optionally its associated data from ChromaDB and FalkorDB.
     """
     try:
         tracker = get_document_tracker()
@@ -214,15 +248,15 @@ async def delete_document(doc_id: str, request: DeleteDocumentRequest):
         }
 
         # Delete vectors from ChromaDB
-        if request.delete_vectors and document.vector_ids:
+        if delete_vectors and document.vector_ids:
             try:
                 vector_store = get_vector_store()
                 results["vectors_deleted"] = vector_store.delete_by_ids(document.vector_ids)
             except Exception as e:
                 logger.warning(f"Failed to delete vectors: {e}")
 
-        # Delete nodes from Neo4j
-        if request.delete_graph_nodes and document.graph_node_ids:
+        # Delete nodes from FalkorDB
+        if delete_graph_nodes and document.graph_node_ids:
             try:
                 graph_builder = get_graph_builder()
                 graph_result = await graph_builder.delete_by_node_ids(document.graph_node_ids)
@@ -231,7 +265,7 @@ async def delete_document(doc_id: str, request: DeleteDocumentRequest):
                 logger.warning(f"Failed to delete graph nodes: {e}")
 
         # Delete document record
-        results["document_deleted"] = tracker.delete_document(doc_id, soft_delete=request.soft_delete)
+        results["document_deleted"] = tracker.delete_document(doc_id, soft_delete=soft_delete)
 
         return {
             "status": "success",
@@ -370,29 +404,36 @@ async def clear_all_data(
     try:
         tracker = get_document_tracker()
         vector_store = get_vector_store()
-        graph_builder = get_graph_builder()
 
         results = {
             "vectors_cleared": 0,
             "graph_cleared": {"nodes_deleted": 0, "edges_deleted": 0},
-            "documents_cleared": 0
+            "documents_cleared": 0,
+            "errors": []
         }
 
         # Clear ChromaDB
         try:
             results["vectors_cleared"] = vector_store.clear_collection()
+            logger.info(f"Cleared {results['vectors_cleared']} vectors from ChromaDB")
         except Exception as e:
             logger.warning(f"Failed to clear vectors: {e}")
+            results["errors"].append(f"ChromaDB: {str(e)}")
 
-        # Clear Neo4j
+        # Clear FalkorDB/Graphiti
         try:
-            graph_result = await graph_builder.clear_graph()
-            results["graph_cleared"] = {
-                "nodes_deleted": graph_result.get("nodes_deleted", 0),
-                "edges_deleted": graph_result.get("edges_deleted", 0)
-            }
+            graphiti_service = get_graphiti_service()
+            if graphiti_service:
+                await graphiti_service.initialize()
+                graph_result = await graphiti_service.clear_graph()
+                results["graph_cleared"] = {
+                    "nodes_deleted": graph_result.get("nodes_deleted", 0),
+                    "edges_deleted": graph_result.get("edges_deleted", 0)
+                }
+                logger.info(f"Cleared graph: {results['graph_cleared']}")
         except Exception as e:
             logger.warning(f"Failed to clear graph: {e}")
+            results["errors"].append(f"FalkorDB: {str(e)}")
 
         # Clear document tracker (delete all documents)
         try:
@@ -401,8 +442,10 @@ async def clear_all_data(
                 if doc:
                     tracker.delete_document(doc.id)
                     results["documents_cleared"] += 1
+            logger.info(f"Cleared {results['documents_cleared']} documents from tracker")
         except Exception as e:
             logger.warning(f"Failed to clear documents: {e}")
+            results["errors"].append(f"Document tracker: {str(e)}")
 
         return {
             "status": "success",
@@ -444,7 +487,7 @@ async def get_document_history(doc_id: str):
 @router.post("/sync", response_model=Dict[str, Any])
 async def sync_existing_data():
     """
-    Sync existing data from ChromaDB and Neo4j into the document tracker.
+    Sync existing data from ChromaDB and FalkorDB into the document tracker.
     This imports data that was created before the document tracker was added.
     """
     try:
@@ -518,7 +561,7 @@ async def sync_existing_data():
             results["errors"].append(f"ChromaDB sync error: {str(e)}")
             logger.error(f"ChromaDB sync error: {e}")
 
-        # Get graph nodes from Neo4j
+        # Get graph nodes from FalkorDB
         try:
             await graph_builder.initialize()
             if graph_builder.is_connected():
@@ -544,8 +587,8 @@ async def sync_existing_data():
                             results["graph_nodes_linked"] += 1
 
         except Exception as e:
-            results["errors"].append(f"Neo4j sync error: {str(e)}")
-            logger.error(f"Neo4j sync error: {e}")
+            results["errors"].append(f"FalkorDB sync error: {str(e)}")
+            logger.error(f"FalkorDB sync error: {e}")
 
         return {
             "status": "success" if not results["errors"] else "partial",

@@ -1,5 +1,5 @@
 """
-API endpoints for system statistics combining ChromaDB and Neo4j data.
+API endpoints for system statistics combining ChromaDB and FalkorDB/Graphiti data.
 """
 from pathlib import Path
 from typing import Dict, Any, List
@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from ...core.logging import logger
 from ...core.config import settings
 from ...services.vector_store import VectorStoreService
-from ...services.graph_builder import GraphBuilderService, get_graph_builder
+from ...services.graphiti_service import get_graphiti_service
 
 
 router = APIRouter()
@@ -59,7 +59,72 @@ def count_documents() -> int:
 
 
 def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
-    """Get recent pipeline jobs with their status."""
+    """Get recent pipeline jobs with their status from document tracker."""
+    from ...services.document_tracker import get_document_tracker
+
+    jobs = []
+
+    try:
+        # Get recent documents from the document tracker (primary source of truth)
+        tracker = get_document_tracker()
+        documents = tracker.list_documents(limit=limit)
+
+        # Map document status to pipeline stage
+        status_to_stage = {
+            "pending": "raw",
+            "parsing": "raw",
+            "parsed": "parsed",
+            "chunking": "parsed",
+            "chunked": "chunked",
+            "embedding": "chunked",
+            "embedded": "embedded",
+            "graphing": "embedded",
+            "graphed": "graphed",
+            "completed": "graphed",
+            "failed": "failed",
+            "error": "failed",
+        }
+
+        for doc in documents:
+            if doc:
+                # Determine job type from source
+                source_type = doc.source_type if hasattr(doc, 'source_type') else "unknown"
+                job_type = "crawl" if source_type == "crawl" else "upload"
+
+                # Get stage from status
+                status = doc.status if hasattr(doc, 'status') else "unknown"
+                stage = status_to_stage.get(status, status)
+
+                # Check if document has been processed through graph
+                metadata = doc.metadata or {}
+                if metadata.get("entities_count", 0) > 0 or metadata.get("reprocessed_at"):
+                    stage = "graphed"
+                elif doc.vector_ids and len(doc.vector_ids) > 0:
+                    stage = "embedded"
+
+                jobs.append({
+                    "id": doc.title or doc.id[:30],
+                    "doc_id": doc.id,
+                    "type": job_type,
+                    "stage": stage,
+                    "status": status,
+                    "timestamp": doc.updated_at.isoformat() if doc.updated_at else doc.created_at.isoformat() if doc.created_at else "",
+                    "chunks": doc.chunk_count or 0,
+                    "entities": metadata.get("entities_count", 0),
+                })
+
+    except Exception as e:
+        logger.warning(f"Failed to get jobs from document tracker: {e}")
+        # Fallback to file system based tracking
+        jobs = _get_jobs_from_filesystem(limit)
+
+    # Sort by timestamp and limit
+    jobs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return jobs[:limit]
+
+
+def _get_jobs_from_filesystem(limit: int = 10) -> List[Dict[str, Any]]:
+    """Fallback: Get jobs from file system directories."""
     jobs = []
 
     # Check raw data directory for crawl jobs
@@ -80,7 +145,6 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
     if parsed_dir.exists():
         for job_dir in parsed_dir.iterdir():
             if job_dir.is_dir():
-                # Update existing job or add new
                 existing = next((j for j in jobs if j["id"] == job_dir.name), None)
                 if existing:
                     existing["stage"] = "parsed"
@@ -108,8 +172,6 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
                         "timestamp": datetime.fromtimestamp(job_dir.stat().st_mtime).isoformat(),
                     })
 
-    # Sort by timestamp and limit
-    jobs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return jobs[:limit]
 
 
@@ -121,7 +183,7 @@ async def get_system_overview():
     Returns combined metrics from:
     - File system (documents, chunks)
     - ChromaDB (vector embeddings)
-    - Neo4j (knowledge graph)
+    - FalkorDB (knowledge graph)
     """
     stats = {
         "status": "success",
@@ -135,7 +197,7 @@ async def get_system_overview():
         },
         "services": {
             "chromadb": {"status": "unknown", "chunks_stored": 0},
-            "neo4j": {"status": "unknown", "nodes": 0, "edges": 0, "entity_types": {}},
+            "falkordb": {"status": "unknown", "nodes": 0, "edges": 0, "entity_types": {}},
         },
         "recent_jobs": [],
     }
@@ -167,34 +229,35 @@ async def get_system_overview():
         logger.error(f"Error getting ChromaDB stats: {e}")
         stats["services"]["chromadb"]["status"] = f"error: {str(e)}"
 
-    # Get Neo4j/Graph stats
+    # Get FalkorDB/Graphiti stats
     try:
-        graph_builder = get_graph_builder()
-        if graph_builder:
-            init_success = await graph_builder.initialize()
+        graphiti_service = get_graphiti_service()
+        if graphiti_service:
+            init_success = await graphiti_service.initialize()
 
             if init_success:
-                graph_stats = await graph_builder.get_graph_stats()
+                graph_stats = await graphiti_service.get_stats()
 
                 if graph_stats.get("status") == "success":
-                    stats["metrics"]["entities"] = graph_stats.get("total_nodes", 0)
-                    stats["metrics"]["edges"] = graph_stats.get("total_edges", 0)
-                    stats["services"]["neo4j"] = {
+                    stats["metrics"]["entities"] = graph_stats.get("total_entities", 0)
+                    stats["metrics"]["edges"] = graph_stats.get("total_relationships", 0)
+                    stats["services"]["falkordb"] = {
                         "status": "connected",
-                        "nodes": graph_stats.get("total_nodes", 0),
-                        "edges": graph_stats.get("total_edges", 0),
+                        "nodes": graph_stats.get("total_entities", 0),
+                        "edges": graph_stats.get("total_relationships", 0),
+                        "episodes": graph_stats.get("total_episodes", 0),
                         "entity_types": graph_stats.get("entity_types", {}),
                     }
                 else:
-                    stats["services"]["neo4j"]["status"] = f"error: {graph_stats.get('error', 'unknown')}"
+                    stats["services"]["falkordb"]["status"] = f"error: {graph_stats.get('error', 'unknown')}"
             else:
-                stats["services"]["neo4j"]["status"] = "disconnected"
+                stats["services"]["falkordb"]["status"] = "disconnected"
         else:
-            stats["services"]["neo4j"]["status"] = "not configured"
+            stats["services"]["falkordb"]["status"] = "not configured"
 
     except Exception as e:
-        logger.error(f"Error getting Neo4j stats: {e}")
-        stats["services"]["neo4j"]["status"] = f"error: {str(e)}"
+        logger.error(f"Error getting FalkorDB stats: {e}")
+        stats["services"]["falkordb"]["status"] = f"error: {str(e)}"
 
     return stats
 
@@ -220,23 +283,30 @@ async def get_chromadb_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/neo4j", response_model=dict)
-async def get_neo4j_stats():
-    """Get detailed Neo4j statistics."""
+@router.get("/falkordb", response_model=dict)
+async def get_falkordb_stats():
+    """Get detailed FalkorDB/Graphiti statistics."""
     try:
-        graph_builder = get_graph_builder()
-        init_success = await graph_builder.initialize()
+        graphiti_service = get_graphiti_service()
+        init_success = await graphiti_service.initialize()
 
         if not init_success:
-            raise HTTPException(status_code=500, detail="Neo4j service unavailable")
+            raise HTTPException(status_code=500, detail="FalkorDB service unavailable")
 
-        return await graph_builder.get_graph_stats()
+        return await graphiti_service.get_stats()
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting Neo4j stats: {e}")
+        logger.error(f"Error getting FalkorDB stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Legacy endpoint for backwards compatibility
+@router.get("/neo4j", response_model=dict)
+async def get_neo4j_stats():
+    """Get detailed graph statistics (redirects to FalkorDB)."""
+    return await get_falkordb_stats()
 
 
 @router.get("/jobs", response_model=dict)

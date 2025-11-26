@@ -54,7 +54,7 @@ async def chat_with_agent(request: ChatRequest):
 
     The agent has access to:
     - Vector search (ChromaDB) for semantic similarity
-    - Graph search (Neo4j) for structured information
+    - Graph search (FalkorDB) for structured information
     - Database statistics
 
     Example queries:
@@ -195,7 +195,7 @@ async def search_knowledge_base(
 @router.get("/tools/stats")
 async def get_knowledge_base_stats():
     """
-    Get statistics about the knowledge base (ChromaDB and Neo4j).
+    Get statistics about the knowledge base (ChromaDB and FalkorDB).
 
     Returns:
         Statistics about vector store and graph database

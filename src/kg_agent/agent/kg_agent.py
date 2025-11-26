@@ -105,7 +105,7 @@ async def get_database_statistics(ctx: RunContext[AgentDependencies]) -> str:
     Get current statistics about the knowledge base databases.
 
     Returns:
-        A formatted string with statistics about ChromaDB and Neo4j
+        A formatted string with statistics about ChromaDB and FalkorDB
     """
     rag_tools = ctx.deps.rag_tools
 
@@ -119,7 +119,7 @@ async def get_database_statistics(ctx: RunContext[AgentDependencies]) -> str:
         output += f"- Collection: {vector_stats.collection_name}\n"
         output += f"- Total Chunks: {vector_stats.total_chunks}\n\n"
 
-        output += "**Knowledge Graph (Neo4j)**\n"
+        output += "**Knowledge Graph (FalkorDB)**\n"
         output += f"- Connected: {'✅ Yes' if graph_stats.connected else '❌ No'}\n"
         output += f"- Total Nodes: {graph_stats.total_nodes}\n"
         output += f"- Total Edges: {graph_stats.total_edges}\n"
@@ -261,7 +261,7 @@ async def get_document_statistics(ctx: RunContext[AgentDependencies]) -> str:
             output += "\n"
 
         output += f"**Total Vectors (ChromaDB):** {stats.total_vectors}\n"
-        output += f"**Total Graph Nodes (Neo4j):** {stats.total_graph_nodes}\n"
+        output += f"**Total Graph Nodes (FalkorDB):** {stats.total_graph_nodes}\n"
 
         return output
 
@@ -283,7 +283,7 @@ async def delete_document(
     Args:
         doc_id: The document ID to delete
         delete_vectors: Whether to delete vectors from ChromaDB (default: True)
-        delete_graph_nodes: Whether to delete nodes from Neo4j (default: True)
+        delete_graph_nodes: Whether to delete nodes from FalkorDB (default: True)
 
     Returns:
         A message describing the deletion result
@@ -326,7 +326,7 @@ async def delete_documents_by_source(
     Args:
         source_pattern: Pattern to match source URLs (e.g., "example.com")
         delete_vectors: Whether to delete vectors from ChromaDB
-        delete_graph_nodes: Whether to delete nodes from Neo4j
+        delete_graph_nodes: Whether to delete nodes from FalkorDB
 
     Returns:
         A message describing the deletion result
@@ -371,7 +371,7 @@ async def clear_all_data(
         A message describing the result
     """
     if not confirm:
-        return "⚠️ **Warning**: This will delete ALL data from ChromaDB, Neo4j, and the document tracker.\n\nTo confirm, call this tool with confirm=True."
+        return "⚠️ **Warning**: This will delete ALL data from ChromaDB, FalkorDB, and the document tracker.\n\nTo confirm, call this tool with confirm=True."
 
     rag_tools = ctx.deps.rag_tools
 

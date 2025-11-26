@@ -22,9 +22,13 @@ import { Badge } from "@/components/ui/badge";
 
 interface JobInfo {
   id: string;
+  doc_id?: string;
   type: string;
   stage: string;
+  status?: string;
   timestamp: string;
+  chunks?: number;
+  entities?: number;
 }
 
 interface ServiceStatus {
@@ -47,7 +51,7 @@ interface StatsOverview {
   };
   services: {
     chromadb: ServiceStatus;
-    neo4j: ServiceStatus;
+    falkordb: ServiceStatus;
   };
   recent_jobs: JobInfo[];
 }
@@ -62,14 +66,21 @@ function getStageProgress(stage: string): number {
 
 function getStageIcon(stage: string) {
   switch (stage) {
-    case "chunked":
-    case "embedded":
     case "graphed":
+    case "completed":
       return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+    case "embedded":
+      return <CheckCircle2 className="h-4 w-4 text-blue-500" />;
+    case "chunked":
+      return <CheckCircle2 className="h-4 w-4 text-purple-500" />;
     case "parsed":
       return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />;
     case "raw":
+    case "pending":
       return <Circle className="h-4 w-4 text-yellow-500" />;
+    case "failed":
+    case "error":
+      return <AlertCircle className="h-4 w-4 text-red-500" />;
     default:
       return <Circle className="h-4 w-4 text-gray-500" />;
   }
@@ -150,7 +161,12 @@ export function PipelineStatus() {
   }
 
   const metrics = data?.metrics ?? { documents: 0, chunks: 0, entities: 0, edges: 0, active_jobs: 0 };
-  const services = data?.services ?? { chromadb: { status: "unknown" }, neo4j: { status: "unknown" } };
+  // Support both falkordb (new) and neo4j (legacy) keys for backwards compatibility
+  const graphService = data?.services?.falkordb ?? data?.services?.neo4j ?? { status: "unknown", nodes: 0, edges: 0 };
+  const services = {
+    chromadb: data?.services?.chromadb ?? { status: "unknown" },
+    falkordb: graphService,
+  };
   const recentJobs = data?.recent_jobs ?? [];
 
   return (
@@ -245,15 +261,15 @@ export function PipelineStatus() {
                 <Network className="h-4 w-4 text-blue-400" />
               </div>
               <div>
-                <p className="text-sm font-medium text-purple-100">Neo4j</p>
-                <p className="text-xs text-purple-200/60">Knowledge Graph</p>
+                <p className="text-sm font-medium text-purple-100">FalkorDB</p>
+                <p className="text-xs text-purple-200/60">Knowledge Graph (Graphiti)</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-sm text-purple-200/80">
-                {services.neo4j.nodes ?? 0} nodes, {services.neo4j.edges ?? 0} edges
+                {services.falkordb.nodes ?? 0} nodes, {services.falkordb.edges ?? 0} edges
               </span>
-              {getServiceStatusBadge(services.neo4j.status)}
+              {getServiceStatusBadge(services.falkordb.status)}
             </div>
           </div>
         </CardContent>
@@ -275,14 +291,14 @@ export function PipelineStatus() {
               <p className="text-sm mt-1">Start a crawl or upload files to begin processing</p>
             </div>
           ) : (
-            recentJobs.map((job) => (
-              <div key={job.id} className="space-y-2">
+            recentJobs.map((job, index) => (
+              <div key={job.doc_id || job.id || index} className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2 text-purple-100">
                     {getStageIcon(job.stage)}
                     <span className="font-medium">{job.type === "crawl" ? "Crawl" : "Upload"}: </span>
                     <span className="text-purple-200/80 truncate max-w-[200px]" title={job.id}>
-                      {job.id.substring(0, 30)}...
+                      {job.id.length > 30 ? `${job.id.substring(0, 30)}...` : job.id}
                     </span>
                   </div>
                   <span className="text-purple-200/60 text-xs flex items-center gap-1">
@@ -295,9 +311,23 @@ export function PipelineStatus() {
                     value={getStageProgress(job.stage)}
                     className="h-2 bg-purple-950/50 flex-1"
                   />
-                  <span className="text-xs text-purple-200/60 capitalize w-16 text-right">
-                    {job.stage}
-                  </span>
+                  <div className="flex items-center gap-2 text-xs text-purple-200/60">
+                    {job.chunks !== undefined && job.chunks > 0 && (
+                      <span className="flex items-center gap-1">
+                        <Layers className="h-3 w-3" />
+                        {job.chunks}
+                      </span>
+                    )}
+                    {job.entities !== undefined && job.entities > 0 && (
+                      <span className="flex items-center gap-1 text-green-400">
+                        <Database className="h-3 w-3" />
+                        {job.entities}
+                      </span>
+                    )}
+                    <span className="capitalize w-16 text-right">
+                      {job.stage}
+                    </span>
+                  </div>
                 </div>
               </div>
             ))

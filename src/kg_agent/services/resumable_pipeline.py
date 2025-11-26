@@ -22,12 +22,16 @@ from .vector_store import get_vector_store
 from .graph_builder import get_graph_builder
 from .entity_extractor import get_entity_extractor
 from .entity_resolver import EntityResolver
+from .graphiti_service import get_graphiti_service
 from .processing_job_tracker import (
     get_job_tracker,
     ProcessingJob,
     JobStatus,
     JobType,
 )
+
+# How often to commit entities to the graph database (every N chunks)
+INCREMENTAL_COMMIT_INTERVAL = 20
 
 
 class ResumablePipeline:
@@ -49,10 +53,16 @@ class ResumablePipeline:
         self.entity_extractor = get_entity_extractor()
         self.entity_resolver = EntityResolver()
         self.job_tracker = get_job_tracker()
+        self.graphiti_service = get_graphiti_service()
 
         # In-memory state for current processing
         self._should_pause: Dict[str, bool] = {}
         self._is_running: Dict[str, bool] = {}
+
+        # Track chunks since last graph commit for incremental updates
+        self._chunks_since_commit: Dict[str, int] = {}
+        self._pending_entities: Dict[str, List[Entity]] = {}
+        self._pending_relationships: Dict[str, List[Relationship]] = {}
 
     # ==================== Job Control ====================
 
@@ -250,18 +260,26 @@ class ResumablePipeline:
                     try:
                         result = await self.entity_extractor.extract_from_chunk(chunk)
 
-                        # Store extracted data
+                        # Store extracted data in job tracker (for persistence)
                         for entity in result.entities:
                             self.job_tracker.store_extracted_entity(
                                 job_id, chunk.id, entity.model_dump()
                             )
                             total_entities += 1
+                            # Add to pending for incremental commit
+                            if job_id not in self._pending_entities:
+                                self._pending_entities[job_id] = []
+                            self._pending_entities[job_id].append(entity)
 
                         for rel in result.relationships:
                             self.job_tracker.store_extracted_relationship(
                                 job_id, chunk.id, rel.model_dump()
                             )
                             total_relationships += 1
+                            # Add to pending for incremental commit
+                            if job_id not in self._pending_relationships:
+                                self._pending_relationships[job_id] = []
+                            self._pending_relationships[job_id].append(rel)
 
                         # Record chunk as processed
                         self.job_tracker.record_processed_chunk(
@@ -273,6 +291,16 @@ class ResumablePipeline:
                         )
 
                         processed_count += 1
+
+                        # Track chunks since last commit
+                        if job_id not in self._chunks_since_commit:
+                            self._chunks_since_commit[job_id] = 0
+                        self._chunks_since_commit[job_id] += 1
+
+                        # Incremental commit every N chunks
+                        if self._chunks_since_commit[job_id] >= INCREMENTAL_COMMIT_INTERVAL:
+                            await self._incremental_commit_to_graphiti(job_id, doc_id)
+                            self._chunks_since_commit[job_id] = 0
 
                     except Exception as e:
                         logger.warning(f"Failed to process chunk {chunk.id}: {e}")
@@ -301,14 +329,22 @@ class ResumablePipeline:
                 # Small delay between batches
                 await asyncio.sleep(0.1)
 
-            # All chunks processed - now resolve and update graph
-            logger.info(f"Job {job_id}: Extraction complete. Resolving entities...")
+            # All chunks processed - commit any remaining pending entities
+            logger.info(f"Job {job_id}: Extraction complete. Committing remaining entities...")
 
-            # Get all extracted entities and relationships
+            # Final incremental commit for any remaining entities
+            final_commit = await self._incremental_commit_to_graphiti(job_id, doc_id)
+
+            # Clean up tracking state
+            self._chunks_since_commit.pop(job_id, None)
+            self._pending_entities.pop(job_id, None)
+            self._pending_relationships.pop(job_id, None)
+
+            # Get all extracted entities and relationships for stats
             all_entity_data = self.job_tracker.get_extracted_entities(job_id)
             all_rel_data = self.job_tracker.get_extracted_relationships(job_id)
 
-            # Reconstruct Entity and Relationship objects
+            # Reconstruct Entity and Relationship objects for dedup stats
             from ..models.entity import Entity, Relationship, EntityType, RelationshipType
 
             entities = []
@@ -325,7 +361,7 @@ class ResumablePipeline:
                 except Exception as e:
                     logger.warning(f"Failed to reconstruct relationship: {e}")
 
-            # Resolve/deduplicate
+            # Resolve/deduplicate for stats (Graphiti handles actual dedup)
             resolved_entities = self.entity_resolver.resolve_entities(entities)
             resolved_relationships = self.entity_resolver.resolve_relationships(
                 relationships, resolved_entities
@@ -336,10 +372,12 @@ class ResumablePipeline:
                 f"{len(resolved_relationships)} relationships"
             )
 
-            # Update graph
-            graph_result = await self._update_graph(
-                doc_id, resolved_entities, resolved_relationships, options
-            )
+            # Get final graph stats from Graphiti
+            graph_stats = await self.graphiti_service.get_stats()
+            graph_result = {
+                "nodes_created": graph_stats.get("total_entities", 0),
+                "edges_created": graph_stats.get("total_relationships", 0),
+            }
 
             # Mark as inserted
             self.job_tracker.mark_entities_inserted(job_id)
@@ -476,6 +514,82 @@ class ResumablePipeline:
 
         return chunks
 
+    async def _incremental_commit_to_graphiti(self, job_id: str, doc_id: str) -> Dict[str, Any]:
+        """
+        Commit pending entities and relationships to Graphiti/FalkorDB.
+
+        This allows real-time graph updates during processing instead of
+        waiting until the job completes.
+        """
+        pending_entities = self._pending_entities.get(job_id, [])
+        pending_relationships = self._pending_relationships.get(job_id, [])
+
+        if not pending_entities and not pending_relationships:
+            return {"nodes_created": 0, "edges_created": 0}
+
+        logger.info(
+            f"Job {job_id}: Incremental commit - {len(pending_entities)} entities, "
+            f"{len(pending_relationships)} relationships"
+        )
+
+        try:
+            # Initialize Graphiti if needed
+            if not self.graphiti_service._initialized:
+                await self.graphiti_service.initialize()
+
+            if not self.graphiti_service._graphiti:
+                logger.warning("Graphiti not available, skipping incremental commit")
+                return {"nodes_created": 0, "edges_created": 0}
+
+            # Build episode content from entities and relationships
+            episode_parts = []
+
+            for entity in pending_entities:
+                desc = f" - {entity.description}" if entity.description else ""
+                episode_parts.append(f"{entity.name} is a {entity.type.value}{desc}.")
+
+            for rel in pending_relationships:
+                desc = f" ({rel.description})" if rel.description else ""
+                episode_parts.append(
+                    f"{rel.source_entity} {rel.type.value} {rel.target_entity}{desc}."
+                )
+
+            if episode_parts:
+                from datetime import timezone
+
+                episode_content = " ".join(episode_parts)
+
+                # Add as episode - Graphiti will extract and deduplicate
+                result = await self.graphiti_service.add_episode(
+                    content=episode_content,
+                    name=f"Extraction from {doc_id} (incremental)",
+                    source_description=f"Incremental extraction from document {doc_id}",
+                    reference_time=datetime.now(timezone.utc),
+                    source_type="text",
+                )
+
+                # Result is a dict from GraphitiService.add_episode()
+                nodes_created = result.get("nodes_created", 0) if result else 0
+                edges_created = result.get("edges_created", 0) if result else 0
+
+                logger.info(
+                    f"Job {job_id}: Graphiti created {nodes_created} nodes, {edges_created} edges"
+                )
+            else:
+                nodes_created = 0
+                edges_created = 0
+
+            # Clear pending
+            self._pending_entities[job_id] = []
+            self._pending_relationships[job_id] = []
+
+            return {"nodes_created": nodes_created, "edges_created": edges_created}
+
+        except Exception as e:
+            logger.error(f"Incremental commit failed: {e}")
+            # Don't clear pending on failure - they'll be retried next interval
+            return {"nodes_created": 0, "edges_created": 0, "error": str(e)}
+
     async def _update_graph(
         self,
         doc_id: str,
@@ -483,11 +597,11 @@ class ResumablePipeline:
         relationships: List[Relationship],
         options: ReprocessingOptions,
     ) -> Dict[str, Any]:
-        """Update Neo4j graph with extracted entities and relationships."""
+        """Update FalkorDB graph with extracted entities and relationships (legacy method)."""
         await self.graph_builder.initialize()
 
         if not self.graph_builder.driver:
-            logger.warning("Neo4j not available, skipping graph update")
+            logger.warning("FalkorDB not available, skipping graph update")
             return {"nodes_created": 0, "edges_created": 0}
 
         nodes_created = 0

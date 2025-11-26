@@ -1,22 +1,22 @@
 # Pydantic AI Knowledge Graph Agent
 
-This module provides a Pydantic AI agent that connects to LM Studio for local LLM inference and has tools for RAG (Retrieval-Augmented Generation) using ChromaDB and Neo4j.
+This module provides a Pydantic AI agent that connects to LM Studio for local LLM inference and has tools for RAG (Retrieval-Augmented Generation) using ChromaDB and FalkorDB.
 
 ## Features
 
 - **LM Studio Integration**: Uses OpenAI-compatible API to connect to any model running in LM Studio
 - **Vector Search (ChromaDB)**: Semantic similarity search across document chunks
-- **Graph Search (Neo4j)**: Structured search in the knowledge graph
+- **Graph Search (FalkorDB)**: Structured search in the knowledge graph via Graphiti
 - **Hybrid Search**: Combines both vector and graph search for comprehensive results
 - **FastAPI Endpoints**: REST API for chat and tool access
 
 ## Prerequisites
 
 1. **LM Studio**: Download from [lmstudio.ai](https://lmstudio.ai/)
-   - Load a model (e.g., Llama 3, Mistral, etc.)
+   - Load a model (e.g., Llama 3, Mistral, Qwen, etc.)
    - Start the local server (default: `http://localhost:1234/v1`)
 
-2. **Neo4j**: Running instance (Docker recommended)
+2. **FalkorDB**: Running instance (Docker recommended)
    ```bash
    docker compose -f docker-compose.dev.yml up -d
    ```
@@ -37,10 +37,10 @@ LLM_MODEL_NAME=local-model  # Any name, LM Studio uses the loaded model
 CHROMA_PERSIST_DIR=./data/chroma_db
 CHROMA_COLLECTION_NAME=document_chunks
 
-# Neo4j
-NEO4J_URI=neo4j://localhost:7687
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=password
+# FalkorDB (Graphiti)
+GRAPH_DRIVER=falkordb
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6380
 ```
 
 ## Usage
@@ -121,7 +121,7 @@ curl http://localhost:8000/api/v1/agent/health
 The agent has access to these tools:
 
 1. **search_knowledge_base**: Search for information using vector, graph, or hybrid search
-2. **get_database_statistics**: Get current stats about ChromaDB and Neo4j
+2. **get_database_statistics**: Get current stats about ChromaDB and FalkorDB
 3. **search_by_source**: Find documents from a specific source
 
 ## Dashboard Integration
@@ -158,13 +158,12 @@ agent/
 - Check the server is started (Developer → Local Server)
 - Verify the port matches `LLM_BASE_URL`
 
-### Neo4j Connection Error
-- Start Neo4j: `docker compose -f docker-compose.dev.yml up -d`
-- Check credentials in `.env`
-- Wait for Neo4j to fully start (check logs)
+### FalkorDB Connection Error
+- Start FalkorDB: `docker compose -f docker-compose.dev.yml up -d`
+- Check that port 6380 is accessible
+- Wait for FalkorDB to fully start (check logs)
 
 ### ChromaDB Issues
 - Delete `./data/chroma_db` to reset
 - Check disk space
 - Ensure write permissions
-

@@ -32,7 +32,8 @@ export const pipelineApi = {
 export const statsApi = {
     getOverview: () => api.get('/api/v1/stats/overview'),
     getChromaDBStats: () => api.get('/api/v1/stats/chromadb'),
-    getNeo4jStats: () => api.get('/api/v1/stats/neo4j'),
+    getFalkorDBStats: () => api.get('/api/v1/stats/falkordb'),
+    getNeo4jStats: () => api.get('/api/v1/stats/neo4j'), // Legacy, redirects to FalkorDB
     getJobs: () => api.get('/api/v1/stats/jobs'),
 };
 
@@ -107,7 +108,13 @@ export const documentsApi = {
         delete_vectors?: boolean;
         delete_graph_nodes?: boolean;
         soft_delete?: boolean;
-    }) => api.delete(`/api/v1/documents/${docId}`, { data: options || {} }),
+    }) => api.delete(`/api/v1/documents/${docId}`, {
+        params: {
+            delete_vectors: options?.delete_vectors ?? true,
+            delete_graph_nodes: options?.delete_graph_nodes ?? true,
+            soft_delete: options?.soft_delete ?? false,
+        }
+    }),
 
     // Bulk delete documents
     bulkDelete: (documentIds: string[], options?: {
@@ -134,7 +141,7 @@ export const documentsApi = {
     // Get document processing history
     getHistory: (docId: string) => api.get(`/api/v1/documents/${docId}/history`),
 
-    // Sync existing data from ChromaDB and Neo4j into document tracker
+    // Sync existing data from ChromaDB and FalkorDB into document tracker
     sync: () => api.post('/api/v1/documents/sync'),
 };
 

@@ -53,12 +53,12 @@ class Settings(BaseSettings):
     # Graph Database (Graphiti)
     # Supports: "neo4j" or "falkordb"
     GRAPH_DRIVER: str = "falkordb"
-    
+
     # Neo4j settings (if GRAPH_DRIVER=neo4j)
     NEO4J_URI: str = "bolt://localhost:7687"  # Use bolt:// for single instance
     NEO4J_USERNAME: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
-    
+
     # FalkorDB settings (if GRAPH_DRIVER=falkordb)
     FALKORDB_HOST: str = "localhost"
     FALKORDB_PORT: int = 6380
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     AGENT_SYSTEM_PROMPT: str = """You are a Knowledge Graph Agent that helps users explore and query a knowledge base.
 You have access to tools that can:
 1. Search the vector database (ChromaDB) for semantically similar content
-2. Search the knowledge graph (Neo4j) for structured information
+2. Search the knowledge graph (FalkorDB) for structured information
 3. Start web crawls to add new content to the knowledge base
 4. Get statistics about the current state of the databases
 
