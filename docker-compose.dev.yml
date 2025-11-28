@@ -1,5 +1,3 @@
-version: '3.8'
-
 # =============================================================================
 # Development Docker Compose - Starts only Neo4j and Redis
 # The FastAPI backend and Dashboard run locally for hot-reload development

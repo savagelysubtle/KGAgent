@@ -72,13 +72,14 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
         # Map document status to pipeline stage
         status_to_stage = {
             "pending": "raw",
-            "parsing": "raw",
+            "processing": "processing",  # Active processing
+            "parsing": "parsing",
             "parsed": "parsed",
-            "chunking": "parsed",
+            "chunking": "chunking",
             "chunked": "chunked",
-            "embedding": "chunked",
+            "embedding": "embedding",
             "embedded": "embedded",
-            "graphing": "embedded",
+            "graphing": "graphing",
             "graphed": "graphed",
             "completed": "graphed",
             "failed": "failed",
@@ -89,7 +90,7 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
             if doc:
                 # Determine job type from source
                 source_type = doc.source_type if hasattr(doc, 'source_type') else "unknown"
-                job_type = "crawl" if source_type == "crawl" else "upload"
+                job_type = "crawl" if source_type in ["crawl", "web_crawl"] else "upload"
 
                 # Get stage from status
                 status = doc.status if hasattr(doc, 'status') else "unknown"
@@ -97,18 +98,35 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
 
                 # Check if document has been processed through graph
                 metadata = doc.metadata or {}
-                if metadata.get("entities_count", 0) > 0 or metadata.get("reprocessed_at"):
+                if metadata.get("entities_count", 0) > 0 or metadata.get("reprocessed_at") or metadata.get("graphiti_processed"):
                     stage = "graphed"
                 elif doc.vector_ids and len(doc.vector_ids) > 0:
-                    stage = "embedded"
+                    # Has vectors but stage doesn't reflect it - update to embedded
+                    if stage in ["raw", "pending", "processing", "parsing", "parsed", "chunking", "chunked"]:
+                        stage = "embedded"
+
+                # Get display title - prefer original filename from metadata, then title, then truncated ID
+                display_title = (
+                    metadata.get("original_filename") or
+                    metadata.get("title") or
+                    doc.title or
+                    doc.id[:30]
+                )
+
+                # Clean up display title - remove path prefixes if present
+                if display_title and ("/" in display_title or "\\" in display_title):
+                    # Extract just the filename from a path
+                    import os
+                    display_title = os.path.basename(display_title)
 
                 jobs.append({
-                    "id": doc.title or doc.id[:30],
+                    "id": display_title,
                     "doc_id": doc.id,
                     "type": job_type,
                     "stage": stage,
                     "status": status,
-                    "timestamp": doc.updated_at.isoformat() if doc.updated_at else doc.created_at.isoformat() if doc.created_at else "",
+                    # updated_at and created_at are already ISO format strings from the database
+                    "timestamp": doc.updated_at or doc.created_at or "",
                     "chunks": doc.chunk_count or 0,
                     "entities": metadata.get("entities_count", 0),
                 })
@@ -118,7 +136,7 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
         # Fallback to file system based tracking
         jobs = _get_jobs_from_filesystem(limit)
 
-    # Sort by timestamp and limit
+    # Sort by timestamp (updated_at) and limit - most recent first
     jobs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return jobs[:limit]
 
@@ -187,7 +205,7 @@ async def get_system_overview():
     """
     stats = {
         "status": "success",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
         "metrics": {
             "documents": 0,
             "chunks": 0,

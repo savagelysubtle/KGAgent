@@ -153,8 +153,11 @@ export function ReprocessingManager() {
   const [lastResult, setLastResult] = useState<ReprocessingResult | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<Entity | null>(null);
 
+  // Track manual refresh state
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
   // Fetch processing jobs FIRST (needed for polling intervals)
-  const { data: jobsData, isLoading: jobsLoading } = useQuery({
+  const { data: jobsData, isLoading: jobsLoading, refetch: refetchJobs } = useQuery({
     queryKey: ["processing-jobs"],
     queryFn: async () => {
       const response = await reprocessApi.listJobs({});
@@ -554,7 +557,10 @@ export function ReprocessingManager() {
                 <Button
                   variant="outline"
                   size="sm"
+                  disabled={isManualRefreshing}
                   onClick={async () => {
+                    setIsManualRefreshing(true);
+                    try {
                     // Force refetch all data
                     await Promise.all([
                       queryClient.refetchQueries({ queryKey: ["processing-jobs"] }),
@@ -562,11 +568,18 @@ export function ReprocessingManager() {
                       queryClient.refetchQueries({ queryKey: ["entities"] }),
                       queryClient.refetchQueries({ queryKey: ["reprocess-graph-stats"] }),
                     ]);
+                    } finally {
+                      setIsManualRefreshing(false);
+                    }
                   }}
                   className="border-purple-500/30"
                 >
+                  {isManualRefreshing ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
                   <RefreshCw className="h-4 w-4 mr-2" />
-                  Refresh
+                  )}
+                  {isManualRefreshing ? "Refreshing..." : "Refresh"}
                 </Button>
               </div>
             </CardHeader>

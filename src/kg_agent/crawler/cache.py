@@ -91,7 +91,7 @@ class CrawlCache:
         cache_data = {
             "url": url,
             "config_hash": config_hash,
-            "cached_at": datetime.utcnow().isoformat(),
+            "cached_at": datetime.utcnow().isoformat() + "Z",
             "result": result
         }
 

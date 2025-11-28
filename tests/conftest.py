@@ -8,7 +8,7 @@ from typing import Generator, AsyncGenerator
 
 import pytest
 
-from src.kg_agent.services.graph_builder import GraphBuilderService
+from src.kg_agent.services.graphiti_service import GraphitiService, get_graphiti_service
 from src.kg_agent.services.vector_store import VectorStoreService
 from src.kg_agent.services.embedder import EmbedderService
 from src.kg_agent.pipeline.manager import PipelineManager
@@ -67,9 +67,9 @@ def test_html_content() -> str:
         Social Graph are prominent examples.</p>
 
         <h3>Technical Implementation</h3>
-        <p>Modern knowledge graphs often use graph databases like Neo4j for storage
-        and Cypher query language for data retrieval. Vector embeddings can enhance
-        semantic search capabilities.</p>
+        <p>Modern knowledge graphs often use graph databases like Neo4j or FalkorDB
+        for storage and Cypher query language for data retrieval. Vector embeddings
+        can enhance semantic search capabilities.</p>
     </body>
     </html>
     """
@@ -98,10 +98,10 @@ for processing unstructured data into knowledge graphs.
 3. **Storage**: Vectors are stored in ChromaDB for similarity search
 
 ### Knowledge Graph Construction
-The pipeline builds a knowledge graph in Neo4j with:
-- Document nodes containing text chunks
-- Episode nodes grouping related documents
-- Relationships linking documents to episodes
+The pipeline builds a knowledge graph in FalkorDB with:
+- Entity nodes representing concepts, people, organizations
+- Relationship edges connecting related entities
+- Episodic nodes grouping related content
 
 ## Technologies Used
 - Crawl4AI for web scraping
@@ -109,7 +109,7 @@ The pipeline builds a knowledge graph in Neo4j with:
 - LangChain for text chunking
 - Sentence Transformers for embeddings
 - ChromaDB for vector storage
-- Neo4j for graph database
+- Graphiti + FalkorDB for knowledge graph
 """
 
 
@@ -183,12 +183,11 @@ def embedder() -> EmbedderService:
 
 
 @pytest.fixture(scope="function")
-async def graph_builder() -> AsyncGenerator[GraphBuilderService, None]:
-    """Create a GraphBuilderService instance and initialize it."""
-    builder = GraphBuilderService()
-    yield builder
-    # Cleanup
-    await builder.close()
+async def graphiti_service() -> AsyncGenerator[GraphitiService, None]:
+    """Create a GraphitiService instance and initialize it."""
+    service = GraphitiService()
+    yield service
+    await service.close()
 
 
 @pytest.fixture(scope="function")
@@ -198,22 +197,21 @@ def pipeline_manager() -> PipelineManager:
 
 
 @pytest.fixture(scope="function")
-async def initialized_graph_builder() -> AsyncGenerator[GraphBuilderService, None]:
-    """Create and initialize a GraphBuilderService instance."""
-    builder = GraphBuilderService()
-    success = await builder.initialize(max_retries=1)
+async def initialized_graphiti() -> AsyncGenerator[GraphitiService, None]:
+    """Create and initialize a GraphitiService instance."""
+    service = GraphitiService()
+    success = await service.initialize()
     if not success:
-        pytest.skip("Neo4j is not available - skipping graph tests")
-    yield builder
-    await builder.close()
+        pytest.skip("FalkorDB/Graphiti is not available - skipping graph tests")
+    yield service
+    await service.close()
 
 
 @pytest.fixture(scope="function")
-async def clean_graph(initialized_graph_builder: GraphBuilderService) -> AsyncGenerator[GraphBuilderService, None]:
+async def clean_graph(initialized_graphiti: GraphitiService) -> AsyncGenerator[GraphitiService, None]:
     """Provide a clean graph for testing (clears existing data)."""
     # Clear the graph before the test
-    await initialized_graph_builder.clear_graph()
-    yield initialized_graph_builder
+    await initialized_graphiti.clear_graph()
+    yield initialized_graphiti
     # Clear after the test too
-    await initialized_graph_builder.clear_graph()
-
+    await initialized_graphiti.clear_graph()

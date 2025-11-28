@@ -129,7 +129,7 @@ class ReprocessingOptions(BaseModel):
     extract_entities: bool = Field(default=True, description="Extract named entities")
     extract_relationships: bool = Field(default=True, description="Extract relationships between entities")
     update_existing_graph: bool = Field(default=True, description="Update existing graph vs rebuild")
-    batch_size: int = Field(default=3, ge=1, le=10, description="Concurrent extraction batch size")
+    batch_size: int = Field(default=10, ge=1, le=20, description="Chunks per LLM call for extraction")
     include_chunk_nodes: bool = Field(default=True, description="Keep original Document chunk nodes")
 
 

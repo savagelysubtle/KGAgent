@@ -1,94 +1,17 @@
 {
   "mcpServers": {
-    "kg-agent-api": {
-      "url": "http://localhost:8000",
-      "description": "KG Agent Backend API - Web-to-KG ETL Pipeline",
-      "endpoints": {
-        "crawl": {
-          "path": "/api/v1/crawl",
-          "method": "POST",
-          "description": "Initiate web crawling jobs"
-        },
-        "upload": {
-          "path": "/api/v1/upload",
-          "method": "POST",
-          "description": "Upload files for processing"
-        },
-        "pipeline": {
-          "path": "/api/v1/pipeline/run",
-          "method": "POST",
-          "description": "Run full ETL pipeline"
-        },
-        "query": {
-          "path": "/api/v1/query",
-          "method": "GET",
-          "description": "Query the knowledge graph"
-        }
+    "Brave&Terminal": {
+      "command": "node",
+      "args": [
+        "D:\\Coding\\AiChemistCodex\\AiChemistForge\\ToolRack\\TypeScript\\dist\\server\\server.js"
+      ],
+      "type": "stdio",
+      "timeout": 120000,
+      "env": {
+        "NODE_ENV": "production",
+        "LOG_LEVEL": "INFO",
+        "TRUST": "true"
       }
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "D:\\Coding\\KGAgent\\data"
-      ],
-      "description": "MCP Filesystem server for accessing pipeline data and artifacts"
-    },
-    "brave-search": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-brave-search"
-      ],
-      "env": {
-        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
-      },
-      "description": "Brave Search MCP server for web search capabilities"
-    },
-    "github": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      },
-      "description": "GitHub MCP server for repository operations"
-    },
-    "postgres": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-postgres",
-        "${DATABASE_URL}"
-      ],
-      "description": "PostgreSQL MCP server for database operations"
-    },
-    "puppeteer": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-puppeteer"
-      ],
-      "description": "Puppeteer MCP server for browser automation"
-    },
-    "sequential-thinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ],
-      "description": "Sequential thinking server for complex problem solving"
-    },
-    "memory": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ],
-      "description": "Memory server for persistent agent memory across sessions"
     }
   }
 }

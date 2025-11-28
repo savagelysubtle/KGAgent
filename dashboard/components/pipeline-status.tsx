@@ -56,7 +56,7 @@ interface StatsOverview {
   recent_jobs: JobInfo[];
 }
 
-const stageOrder = ["raw", "parsed", "chunked", "embedded", "graphed"];
+const stageOrder = ["raw", "processing", "parsing", "parsed", "chunking", "chunked", "embedding", "embedded", "graphing", "graphed"];
 
 function getStageProgress(stage: string): number {
   const index = stageOrder.indexOf(stage);
@@ -74,6 +74,13 @@ function getStageIcon(stage: string) {
     case "chunked":
       return <CheckCircle2 className="h-4 w-4 text-purple-500" />;
     case "parsed":
+      return <CheckCircle2 className="h-4 w-4 text-cyan-500" />;
+    // Active processing stages - show spinner
+    case "processing":
+    case "parsing":
+    case "chunking":
+    case "embedding":
+    case "graphing":
       return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />;
     case "raw":
     case "pending":

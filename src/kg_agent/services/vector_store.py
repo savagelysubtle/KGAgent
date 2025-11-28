@@ -23,19 +23,18 @@ class VectorStoreService:
             logger.error(f"Failed to initialize ChromaDB: {e}")
             raise
 
+    # ChromaDB max batch size limit
+    MAX_BATCH_SIZE = 5000  # Leave some margin below 5461 limit
+
     def add_chunks(self, chunks: List[Chunk], embeddings: Optional[List[List[float]]] = None):
         """
-        Add chunks to the vector store.
+        Add chunks to the vector store with automatic batching.
         If embeddings are provided separately, they are used.
         Otherwise, it expects chunks to have the 'embedding' field set, or relies on Chroma's default embedder (if not provided).
         However, since we use EmbedderService, we expect embeddings to be passed or in the object.
         """
         if not chunks:
             return
-
-        ids = [c.id for c in chunks]
-        documents = [c.text for c in chunks]
-        metadatas = [c.metadata for c in chunks]
 
         # Prepare embeddings
         final_embeddings = None
@@ -56,30 +55,56 @@ class VectorStoreService:
                 final_embeddings = extracted_embeddings
 
         try:
-            # If final_embeddings is None, Chroma will try to use its default embedder unless we handle it.
-            # Our architecture assumes we provide embeddings.
-            if final_embeddings:
-                self.collection.upsert(
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas,
-                    embeddings=final_embeddings
-                )
-            else:
-                # Fallback: let Chroma embed (if configured, but we prefer our own)
-                # Or log warning.
-                logger.warning("Adding chunks without explicit embeddings. ChromaDB default embedder might be used.")
-                self.collection.upsert(
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas
-                )
+            total_chunks = len(chunks)
 
-            logger.info(f"Upserted {len(chunks)} chunks to ChromaDB")
+            # Process in batches if needed
+            if total_chunks <= self.MAX_BATCH_SIZE:
+                # Small enough for single batch
+                self._upsert_batch(chunks, final_embeddings)
+            else:
+                # Need to batch
+                logger.info(f"Batching {total_chunks} chunks into batches of {self.MAX_BATCH_SIZE}")
+                for i in range(0, total_chunks, self.MAX_BATCH_SIZE):
+                    batch_end = min(i + self.MAX_BATCH_SIZE, total_chunks)
+                    batch_chunks = chunks[i:batch_end]
+                    batch_embeddings = final_embeddings[i:batch_end] if final_embeddings else None
+
+                    logger.info(f"Processing batch {i // self.MAX_BATCH_SIZE + 1}: chunks {i} to {batch_end}")
+                    self._upsert_batch(batch_chunks, batch_embeddings)
+
+            logger.info(f"Upserted {total_chunks} chunks to ChromaDB")
 
         except Exception as e:
             logger.error(f"Error adding chunks to ChromaDB: {e}")
             raise
+
+    def _upsert_batch(self, chunks: List[Chunk], embeddings: Optional[List[List[float]]] = None):
+        """
+        Upsert a single batch of chunks to ChromaDB.
+
+        Args:
+            chunks: List of chunks (must be <= MAX_BATCH_SIZE)
+            embeddings: Optional list of embeddings matching chunks
+        """
+        ids = [c.id for c in chunks]
+        documents = [c.text for c in chunks]
+        metadatas = [c.metadata for c in chunks]
+
+        if embeddings:
+            self.collection.upsert(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+                embeddings=embeddings
+            )
+        else:
+            # Fallback: let Chroma embed (if configured, but we prefer our own)
+            logger.warning("Adding chunks without explicit embeddings. ChromaDB default embedder might be used.")
+            self.collection.upsert(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas
+            )
 
     def query(self, query_embedding: List[float], n_results: int = 5) -> Dict[str, Any]:
         """

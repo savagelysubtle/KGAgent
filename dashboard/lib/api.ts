@@ -143,6 +143,12 @@ export const documentsApi = {
 
     // Sync existing data from ChromaDB and FalkorDB into document tracker
     sync: () => api.post('/api/v1/documents/sync'),
+
+    // Fix document titles from metadata (for old hash-named documents)
+    fixTitles: () => api.post('/api/v1/documents/fix-titles'),
+
+    // Delete stale/stuck documents (pending with no chunks, old failed)
+    deleteStale: () => api.delete('/api/v1/documents/stale'),
 };
 
 // Reprocessing API - Entity Extraction and Knowledge Graph Enhancement

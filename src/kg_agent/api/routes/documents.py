@@ -1,27 +1,24 @@
 """API routes for document management."""
 
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 
 from ...core.logging import logger
 from ...services.document_tracker import (
     get_document_tracker,
-    DocumentTrackerService,
-    TrackedDocument,
-    DocumentStatus,
-    DocumentSource,
 )
-from ...services.vector_store import get_vector_store, VectorStoreService
-from ...services.graph_builder import get_graph_builder, GraphBuilderService
 from ...services.graphiti_service import get_graphiti_service
+from ...services.vector_store import get_vector_store
 
 router = APIRouter()
 
 
 class DocumentCreateRequest(BaseModel):
     """Request to create a document record."""
+
     title: str
     source_type: str
     source_url: Optional[str] = None
@@ -32,6 +29,7 @@ class DocumentCreateRequest(BaseModel):
 
 class DocumentUpdateRequest(BaseModel):
     """Request to update a document record."""
+
     status: Optional[str] = None
     chunk_count: Optional[int] = None
     error_message: Optional[str] = None
@@ -40,23 +38,23 @@ class DocumentUpdateRequest(BaseModel):
 
 class DeleteDocumentRequest(BaseModel):
     """Request to delete a document and its data."""
+
     delete_vectors: bool = True
-    delete_graph_nodes: bool = True
     soft_delete: bool = False
 
 
 class BulkDeleteRequest(BaseModel):
     """Request to delete multiple documents."""
+
     document_ids: List[str]
     delete_vectors: bool = True
-    delete_graph_nodes: bool = True
 
 
 class DeleteBySourceRequest(BaseModel):
     """Request to delete documents by source."""
+
     source_pattern: str
     delete_vectors: bool = True
-    delete_graph_nodes: bool = True
 
 
 @router.get("/", response_model=Dict[str, Any])
@@ -65,7 +63,7 @@ async def list_documents(
     source_type: Optional[str] = Query(None, description="Filter by source type"),
     search: Optional[str] = Query(None, description="Search in title and source_url"),
     limit: int = Query(100, ge=1, le=1000),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
 ):
     """List all tracked documents with optional filtering."""
     try:
@@ -75,13 +73,13 @@ async def list_documents(
             source_type=source_type,
             search=search,
             limit=limit,
-            offset=offset
+            offset=offset,
         )
 
         return {
             "status": "success",
             "count": len(documents),
-            "documents": [doc.to_dict() for doc in documents if doc]
+            "documents": [doc.to_dict() for doc in documents if doc],
         }
 
     except Exception as e:
@@ -108,14 +106,15 @@ async def get_document_stats():
 
         # Get live graph node count from FalkorDB/Graphiti
         try:
-            from ...services.graphiti_service import get_graphiti_service
             graphiti = get_graphiti_service()
             if graphiti:
                 await graphiti.initialize()
                 graph_stats = await graphiti.get_stats()
                 if graph_stats.get("status") == "success":
                     stats["total_graph_nodes"] = graph_stats.get("total_entities", 0)
-                    stats["total_graph_edges"] = graph_stats.get("total_relationships", 0)
+                    stats["total_graph_edges"] = graph_stats.get(
+                        "total_relationships", 0
+                    )
                     stats["total_episodes"] = graph_stats.get("total_episodes", 0)
                     stats["falkordb_connected"] = True
                 else:
@@ -124,10 +123,7 @@ async def get_document_stats():
             logger.warning(f"Failed to get FalkorDB stats: {e}")
             stats["falkordb_connected"] = False
 
-        return {
-            "status": "success",
-            **stats
-        }
+        return {"status": "success", **stats}
 
     except Exception as e:
         logger.error(f"Error getting document stats: {e}")
@@ -144,10 +140,7 @@ async def get_document(doc_id: str):
         if not document:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
 
-        return {
-            "status": "success",
-            "document": document.to_dict()
-        }
+        return {"status": "success", "document": document.to_dict()}
 
     except HTTPException:
         raise
@@ -169,7 +162,7 @@ async def create_document(request: DocumentCreateRequest):
                 return {
                     "status": "duplicate",
                     "message": "Document with same content already exists",
-                    "existing_document": existing.to_dict()
+                    "existing_document": existing.to_dict(),
                 }
 
         document = tracker.create_document(
@@ -178,13 +171,10 @@ async def create_document(request: DocumentCreateRequest):
             source_url=request.source_url,
             file_path=request.file_path,
             content_hash=request.content_hash,
-            metadata=request.metadata
+            metadata=request.metadata,
         )
 
-        return {
-            "status": "success",
-            "document": document.to_dict()
-        }
+        return {"status": "success", "document": document.to_dict()}
 
     except Exception as e:
         logger.error(f"Error creating document: {e}")
@@ -207,12 +197,12 @@ async def update_document(doc_id: str, request: DocumentUpdateRequest):
             status=request.status,
             chunk_count=request.chunk_count,
             error_message=request.error_message,
-            metadata=request.metadata
+            metadata=request.metadata,
         )
 
         return {
             "status": "success",
-            "document": document.to_dict() if document else None
+            "document": document.to_dict() if document else None,
         }
 
     except HTTPException:
@@ -226,11 +216,12 @@ async def update_document(doc_id: str, request: DocumentUpdateRequest):
 async def delete_document(
     doc_id: str,
     delete_vectors: bool = Query(True, description="Delete vectors from ChromaDB"),
-    delete_graph_nodes: bool = Query(True, description="Delete nodes from graph database"),
-    soft_delete: bool = Query(False, description="Soft delete (mark as deleted) instead of hard delete"),
+    soft_delete: bool = Query(False, description="Soft delete instead of hard delete"),
 ):
     """
-    Delete a document and optionally its associated data from ChromaDB and FalkorDB.
+    Delete a document and optionally its associated vector data from ChromaDB.
+
+    Note: Graph data in Graphiti is managed separately through episodes.
     """
     try:
         tracker = get_document_tracker()
@@ -243,34 +234,25 @@ async def delete_document(
         results = {
             "document_id": doc_id,
             "vectors_deleted": 0,
-            "graph_nodes_deleted": 0,
-            "document_deleted": False
+            "document_deleted": False,
         }
 
         # Delete vectors from ChromaDB
         if delete_vectors and document.vector_ids:
             try:
                 vector_store = get_vector_store()
-                results["vectors_deleted"] = vector_store.delete_by_ids(document.vector_ids)
+                results["vectors_deleted"] = vector_store.delete_by_ids(
+                    document.vector_ids
+                )
             except Exception as e:
                 logger.warning(f"Failed to delete vectors: {e}")
 
-        # Delete nodes from FalkorDB
-        if delete_graph_nodes and document.graph_node_ids:
-            try:
-                graph_builder = get_graph_builder()
-                graph_result = await graph_builder.delete_by_node_ids(document.graph_node_ids)
-                results["graph_nodes_deleted"] = graph_result.get("nodes_deleted", 0)
-            except Exception as e:
-                logger.warning(f"Failed to delete graph nodes: {e}")
-
         # Delete document record
-        results["document_deleted"] = tracker.delete_document(doc_id, soft_delete=soft_delete)
+        results["document_deleted"] = tracker.delete_document(
+            doc_id, soft_delete=soft_delete
+        )
 
-        return {
-            "status": "success",
-            **results
-        }
+        return {"status": "success", **results}
 
     except HTTPException:
         raise
@@ -281,18 +263,16 @@ async def delete_document(
 
 @router.post("/bulk-delete", response_model=Dict[str, Any])
 async def bulk_delete_documents(request: BulkDeleteRequest):
-    """Delete multiple documents and their associated data."""
+    """Delete multiple documents and their associated vector data."""
     try:
         tracker = get_document_tracker()
         vector_store = get_vector_store()
-        graph_builder = get_graph_builder()
 
         results = {
             "total_requested": len(request.document_ids),
             "documents_deleted": 0,
             "vectors_deleted": 0,
-            "graph_nodes_deleted": 0,
-            "errors": []
+            "errors": [],
         }
 
         for doc_id in request.document_ids:
@@ -308,15 +288,9 @@ async def bulk_delete_documents(request: BulkDeleteRequest):
                         deleted = vector_store.delete_by_ids(document.vector_ids)
                         results["vectors_deleted"] += deleted
                     except Exception as e:
-                        results["errors"].append(f"Failed to delete vectors for {doc_id}: {e}")
-
-                # Delete graph nodes
-                if request.delete_graph_nodes and document.graph_node_ids:
-                    try:
-                        graph_result = await graph_builder.delete_by_node_ids(document.graph_node_ids)
-                        results["graph_nodes_deleted"] += graph_result.get("nodes_deleted", 0)
-                    except Exception as e:
-                        results["errors"].append(f"Failed to delete graph nodes for {doc_id}: {e}")
+                        results["errors"].append(
+                            f"Failed to delete vectors for {doc_id}: {e}"
+                        )
 
                 # Delete document record
                 if tracker.delete_document(doc_id):
@@ -325,10 +299,7 @@ async def bulk_delete_documents(request: BulkDeleteRequest):
             except Exception as e:
                 results["errors"].append(f"Error processing {doc_id}: {e}")
 
-        return {
-            "status": "success" if not results["errors"] else "partial",
-            **results
-        }
+        return {"status": "success" if not results["errors"] else "partial", **results}
 
     except Exception as e:
         logger.error(f"Error in bulk delete: {e}")
@@ -341,13 +312,11 @@ async def delete_by_source(request: DeleteBySourceRequest):
     try:
         tracker = get_document_tracker()
         vector_store = get_vector_store()
-        graph_builder = get_graph_builder()
 
         results = {
             "source_pattern": request.source_pattern,
             "documents_deleted": 0,
             "vectors_deleted": 0,
-            "graph_nodes_deleted": 0
         }
 
         # Find documents matching the source pattern
@@ -365,22 +334,11 @@ async def delete_by_source(request: DeleteBySourceRequest):
                 except Exception as e:
                     logger.warning(f"Failed to delete vectors for {doc.id}: {e}")
 
-            # Delete graph nodes
-            if request.delete_graph_nodes and doc.graph_node_ids:
-                try:
-                    graph_result = await graph_builder.delete_by_node_ids(doc.graph_node_ids)
-                    results["graph_nodes_deleted"] += graph_result.get("nodes_deleted", 0)
-                except Exception as e:
-                    logger.warning(f"Failed to delete graph nodes for {doc.id}: {e}")
-
             # Delete document record
             if tracker.delete_document(doc.id):
                 results["documents_deleted"] += 1
 
-        return {
-            "status": "success",
-            **results
-        }
+        return {"status": "success", **results}
 
     except Exception as e:
         logger.error(f"Error deleting by source: {e}")
@@ -389,7 +347,7 @@ async def delete_by_source(request: DeleteBySourceRequest):
 
 @router.post("/clear-all", response_model=Dict[str, Any])
 async def clear_all_data(
-    confirm: bool = Query(False, description="Must be true to confirm deletion")
+    confirm: bool = Query(False, description="Must be true to confirm deletion"),
 ):
     """
     Clear ALL data from the system. Use with extreme caution!
@@ -397,8 +355,7 @@ async def clear_all_data(
     """
     if not confirm:
         raise HTTPException(
-            status_code=400,
-            detail="Must pass confirm=true to delete all data"
+            status_code=400, detail="Must pass confirm=true to delete all data"
         )
 
     try:
@@ -409,7 +366,7 @@ async def clear_all_data(
             "vectors_cleared": 0,
             "graph_cleared": {"nodes_deleted": 0, "edges_deleted": 0},
             "documents_cleared": 0,
-            "errors": []
+            "errors": [],
         }
 
         # Clear ChromaDB
@@ -428,7 +385,7 @@ async def clear_all_data(
                 graph_result = await graphiti_service.clear_graph()
                 results["graph_cleared"] = {
                     "nodes_deleted": graph_result.get("nodes_deleted", 0),
-                    "edges_deleted": graph_result.get("edges_deleted", 0)
+                    "edges_deleted": graph_result.get("edges_deleted", 0),
                 }
                 logger.info(f"Cleared graph: {results['graph_cleared']}")
         except Exception as e:
@@ -442,16 +399,14 @@ async def clear_all_data(
                 if doc:
                     tracker.delete_document(doc.id)
                     results["documents_cleared"] += 1
-            logger.info(f"Cleared {results['documents_cleared']} documents from tracker")
+            logger.info(
+                f"Cleared {results['documents_cleared']} documents from tracker"
+            )
         except Exception as e:
             logger.warning(f"Failed to clear documents: {e}")
             results["errors"].append(f"Document tracker: {str(e)}")
 
-        return {
-            "status": "success",
-            "message": "All data cleared",
-            **results
-        }
+        return {"status": "success", "message": "All data cleared", **results}
 
     except Exception as e:
         logger.error(f"Error clearing all data: {e}")
@@ -471,11 +426,7 @@ async def get_document_history(doc_id: str):
 
         history = tracker.get_document_history(doc_id)
 
-        return {
-            "status": "success",
-            "document_id": doc_id,
-            "history": history
-        }
+        return {"status": "success", "document_id": doc_id, "history": history}
 
     except HTTPException:
         raise
@@ -484,41 +435,138 @@ async def get_document_history(doc_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/fix-titles", response_model=Dict[str, Any])
+async def fix_document_titles():
+    """
+    Identify documents with hash-based titles that could be fixed.
+    Returns list of documents where original filename is in metadata.
+    """
+    try:
+        tracker = get_document_tracker()
+        documents = tracker.list_documents(limit=10000)
+
+        results: Dict[str, Any] = {"checked": 0, "needs_fix": 0, "details": []}
+
+        for doc in documents:
+            if not doc:
+                continue
+
+            results["checked"] += 1
+            old_title = doc.title
+
+            # Check if title looks like a hash
+            is_hash_name = (
+                len(old_title) == 16 or len(old_title) == 20
+            ) and old_title.replace(".html", "").replace(".txt", "").replace(
+                ".md", ""
+            ).isalnum()
+
+            if is_hash_name and doc.metadata:
+                new_title = doc.metadata.get("original_filename")
+
+                if new_title and new_title != old_title:
+                    # Store correct title in metadata
+                    updated_metadata = dict(doc.metadata) if doc.metadata else {}
+                    updated_metadata["correct_title"] = new_title
+                    tracker.update_document(doc.id, metadata=updated_metadata)
+
+                    results["needs_fix"] += 1
+                    results["details"].append(
+                        {
+                            "id": doc.id,
+                            "old_title": old_title,
+                            "correct_title": new_title,
+                        }
+                    )
+
+        return {"status": "success", **results}
+
+    except Exception as e:
+        logger.error(f"Error fixing titles: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/stale", response_model=Dict[str, Any])
+async def delete_stale_documents():
+    """
+    Delete documents that are stuck in pending/processing state with no chunks,
+    or documents that failed more than 24 hours ago.
+    """
+    try:
+        tracker = get_document_tracker()
+        documents = tracker.list_documents(limit=10000)
+
+        results = {"checked": 0, "deleted": 0, "details": []}
+
+        for doc in documents:
+            if not doc:
+                continue
+
+            results["checked"] += 1
+            should_delete = False
+            reason = ""
+
+            # Delete pending/processing documents with no chunks
+            if (
+                doc.status
+                in ["pending", "processing", "parsing", "chunking", "embedding"]
+                and doc.chunk_count == 0
+            ):
+                should_delete = True
+                reason = f"Stuck in {doc.status} with no chunks"
+
+            # Delete failed documents with no chunks
+            elif doc.status == "failed" and doc.chunk_count == 0:
+                should_delete = True
+                reason = "Failed with no chunks"
+
+            if should_delete:
+                tracker.delete_document(doc.id)
+                results["deleted"] += 1
+                results["details"].append(
+                    {"id": doc.id, "title": doc.title, "reason": reason}
+                )
+
+        return {"status": "success", **results}
+
+    except Exception as e:
+        logger.error(f"Error deleting stale documents: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/sync", response_model=Dict[str, Any])
 async def sync_existing_data():
     """
-    Sync existing data from ChromaDB and FalkorDB into the document tracker.
+    Sync existing data from ChromaDB into the document tracker.
     This imports data that was created before the document tracker was added.
     """
     try:
         tracker = get_document_tracker()
         vector_store = get_vector_store()
-        graph_builder = get_graph_builder()
 
-        results = {
-            "documents_created": 0,
-            "vectors_linked": 0,
-            "graph_nodes_linked": 0,
-            "errors": []
-        }
+        results = {"documents_created": 0, "vectors_linked": 0, "errors": []}
 
         # Get all vectors from ChromaDB
         try:
             all_data = vector_store.collection.get()
             if all_data and all_data.get("ids"):
                 # Group by doc_id from metadata
-                doc_groups: Dict[str, List[Dict]] = {}
+                doc_groups: Dict[str, Dict] = {}
 
                 for i, vec_id in enumerate(all_data["ids"]):
-                    metadata = all_data["metadatas"][i] if all_data.get("metadatas") else {}
-                    doc_id = metadata.get("doc_id", "unknown")
-                    source = metadata.get("source", "unknown")
+                    metadatas = all_data.get("metadatas")
+                    raw_metadata = metadatas[i] if metadatas else {}
+                    metadata: Dict[str, Any] = (
+                        dict(raw_metadata) if raw_metadata else {}
+                    )
+                    doc_id = str(metadata.get("doc_id", "unknown"))
+                    source = str(metadata.get("source", "unknown"))
 
                     if doc_id not in doc_groups:
                         doc_groups[doc_id] = {
                             "vector_ids": [],
                             "source": source,
-                            "metadata": metadata
+                            "metadata": metadata,
                         }
                     doc_groups[doc_id]["vector_ids"].append(vec_id)
 
@@ -534,13 +582,24 @@ async def sync_existing_data():
 
                     # Create new document
                     source = group_data["source"]
-                    title = source if source != "unknown" else f"Document {doc_id[:8]}"
+                    # Extract just the filename if source is a path
+                    if source and source != "unknown":
+                        import os
+                        # Handle both URL and file path cases
+                        if source.startswith("http"):
+                            title = source  # Keep URL as-is
+                        else:
+                            title = os.path.basename(source)  # Extract just the filename
+                    else:
+                        title = f"Document {doc_id[:8]}"
 
                     doc = tracker.create_document(
                         title=title,
-                        source_type="web_crawl" if source.startswith("http") else "file_upload",
+                        source_type="web_crawl"
+                        if source.startswith("http")
+                        else "file_upload",
                         source_url=source if source.startswith("http") else None,
-                        metadata={"original_doc_id": doc_id}
+                        metadata={"original_doc_id": doc_id},
                     )
 
                     # Link vectors
@@ -551,7 +610,7 @@ async def sync_existing_data():
                         doc.id,
                         status="completed",
                         chunk_count=len(group_data["vector_ids"]),
-                        processed_at=datetime.utcnow().isoformat()
+                        processed_at=datetime.now(timezone.utc).isoformat(),
                     )
 
                     results["documents_created"] += 1
@@ -561,41 +620,8 @@ async def sync_existing_data():
             results["errors"].append(f"ChromaDB sync error: {str(e)}")
             logger.error(f"ChromaDB sync error: {e}")
 
-        # Get graph nodes from FalkorDB
-        try:
-            await graph_builder.initialize()
-            if graph_builder.is_connected():
-                with graph_builder.driver.session() as session:
-                    # Get all Document nodes
-                    result = session.run("""
-                        MATCH (d:Document)
-                        RETURN d.id as id, d.doc_id as doc_id, d.source as source
-                    """)
-
-                    for record in result:
-                        node_id = record["id"]
-                        doc_id = record["doc_id"]
-                        source = record["source"]
-
-                        if not node_id:
-                            continue
-
-                        # Find matching document in tracker
-                        docs = tracker.list_documents(search=source or doc_id, limit=1)
-                        if docs and len(docs) > 0:
-                            tracker.add_graph_node_ids(docs[0].id, [node_id])
-                            results["graph_nodes_linked"] += 1
-
-        except Exception as e:
-            results["errors"].append(f"FalkorDB sync error: {str(e)}")
-            logger.error(f"FalkorDB sync error: {e}")
-
-        return {
-            "status": "success" if not results["errors"] else "partial",
-            **results
-        }
+        return {"status": "success" if not results["errors"] else "partial", **results}
 
     except Exception as e:
         logger.error(f"Error syncing data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

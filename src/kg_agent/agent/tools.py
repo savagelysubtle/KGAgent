@@ -1,25 +1,23 @@
 """RAG Tools for the Pydantic AI Knowledge Graph Agent."""
 
-from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
 import asyncio
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-from ..core.logging import logger
 from ..core.config import settings
-from ..services.vector_store import VectorStoreService, get_vector_store
-from ..services.graphiti_service import GraphitiService, get_graphiti_service
-from ..services.embedder import EmbedderService
+from ..core.logging import logger
 from ..services.document_tracker import (
-    DocumentTrackerService,
     get_document_tracker,
-    TrackedDocument,
-    DocumentStatus,
 )
+from ..services.embedder import EmbedderService
+from ..services.graphiti_service import GraphitiService, get_graphiti_service
+from ..services.vector_store import VectorStoreService, get_vector_store
 
 
 @dataclass
 class SearchResult:
     """A search result from the knowledge base."""
+
     text: str
     source: str
     score: Optional[float] = None
@@ -29,6 +27,7 @@ class SearchResult:
 @dataclass
 class GraphStats:
     """Statistics about the knowledge graph."""
+
     total_nodes: int
     total_edges: int
     entity_types: Dict[str, int]
@@ -39,6 +38,7 @@ class GraphStats:
 @dataclass
 class VectorStats:
     """Statistics about the vector store."""
+
     total_chunks: int
     collection_name: str
 
@@ -46,6 +46,7 @@ class VectorStats:
 @dataclass
 class DocumentInfo:
     """Information about a tracked document."""
+
     id: str
     title: str
     source_url: Optional[str]
@@ -58,6 +59,7 @@ class DocumentInfo:
 @dataclass
 class DocumentStats:
     """Statistics about tracked documents."""
+
     total_documents: int
     by_status: Dict[str, int]
     by_source_type: Dict[str, int]
@@ -68,6 +70,7 @@ class DocumentStats:
 @dataclass
 class DeleteResult:
     """Result of a delete operation."""
+
     success: bool
     documents_deleted: int
     vectors_deleted: int
@@ -78,6 +81,7 @@ class DeleteResult:
 @dataclass
 class EntityCreateResult:
     """Result of creating an entity."""
+
     success: bool
     entity_id: Optional[str]
     message: str
@@ -126,9 +130,7 @@ class RAGTools:
             return False
 
     async def search_vectors(
-        self,
-        query: str,
-        n_results: int = 5
+        self, query: str, n_results: int = 5
     ) -> List[SearchResult]:
         """
         Search the vector database (ChromaDB) for semantically similar content.
@@ -148,8 +150,8 @@ class RAGTools:
             return []
 
         try:
-            # Generate embedding for the query
-            query_embedding = self._embedder.embed_text(query)
+            # Generate embedding for the query (async to avoid blocking)
+            query_embedding = await self._embedder.embed_text_async(query)
 
             # Search ChromaDB
             results = self._vector_store.query(query_embedding, n_results=n_results)
@@ -167,25 +169,25 @@ class RAGTools:
                     # Convert distance to similarity score (cosine distance -> similarity)
                     score = 1 - distance if distance is not None else None
 
-                    search_results.append(SearchResult(
-                        text=doc,
-                        source=metadata.get("source", "unknown"),
-                        score=score,
-                        metadata=metadata
-                    ))
+                    search_results.append(
+                        SearchResult(
+                            text=doc,
+                            source=metadata.get("source", "unknown"),
+                            score=score,
+                            metadata=metadata,
+                        )
+                    )
 
-            logger.info(f"Vector search for '{query}' returned {len(search_results)} results")
+            logger.info(
+                f"Vector search for '{query}' returned {len(search_results)} results"
+            )
             return search_results
 
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
             return []
 
-    async def search_graph(
-        self,
-        query: str,
-        limit: int = 10
-    ) -> List[SearchResult]:
+    async def search_graph(self, query: str, limit: int = 10) -> List[SearchResult]:
         """
         Search the knowledge graph (FalkorDB via Graphiti) for structured information.
 
@@ -212,31 +214,37 @@ class RAGTools:
             if result.get("status") == "success":
                 # Add edges (relationships/facts) as results
                 for edge in result.get("edges", []):
-                    search_results.append(SearchResult(
-                        text=edge.get("fact", ""),
-                        source=f"relationship:{edge.get('name', 'unknown')}",
-                        score=None,
-                        metadata={
-                            "source_node": edge.get("source_node"),
-                            "target_node": edge.get("target_node"),
-                            "created_at": edge.get("created_at"),
-                            "valid_at": edge.get("valid_at"),
-                        }
-                    ))
+                    search_results.append(
+                        SearchResult(
+                            text=edge.get("fact", ""),
+                            source=f"relationship:{edge.get('name', 'unknown')}",
+                            score=None,
+                            metadata={
+                                "source_node": edge.get("source_node"),
+                                "target_node": edge.get("target_node"),
+                                "created_at": edge.get("created_at"),
+                                "valid_at": edge.get("valid_at"),
+                            },
+                        )
+                    )
 
                 # Add nodes (entities) as results
                 for node in result.get("nodes", []):
-                    search_results.append(SearchResult(
-                        text=f"{node.get('name', 'Unknown')}: {node.get('summary', '')}",
-                        source=f"entity:{','.join(node.get('labels', ['Unknown']))}",
-                        score=None,
-                        metadata={
-                            "uuid": node.get("uuid"),
-                            "labels": node.get("labels"),
-                        }
-                    ))
+                    search_results.append(
+                        SearchResult(
+                            text=f"{node.get('name', 'Unknown')}: {node.get('summary', '')}",
+                            source=f"entity:{','.join(node.get('labels', ['Unknown']))}",
+                            score=None,
+                            metadata={
+                                "uuid": node.get("uuid"),
+                                "labels": node.get("labels"),
+                            },
+                        )
+                    )
 
-            logger.info(f"Graph search for '{query}' returned {len(search_results)} results")
+            logger.info(
+                f"Graph search for '{query}' returned {len(search_results)} results"
+            )
             return search_results
 
         except Exception as e:
@@ -244,10 +252,7 @@ class RAGTools:
             return []
 
     async def hybrid_search(
-        self,
-        query: str,
-        vector_results: int = 3,
-        graph_results: int = 3
+        self, query: str, vector_results: int = 3, graph_results: int = 3
     ) -> Dict[str, List[SearchResult]]:
         """
         Perform a hybrid search combining vector and graph search.
@@ -268,10 +273,7 @@ class RAGTools:
             vector_task, graph_task
         )
 
-        return {
-            "vector": vector_results_list,
-            "graph": graph_results_list
-        }
+        return {"vector": vector_results_list, "graph": graph_results_list}
 
     async def get_graph_stats(self) -> GraphStats:
         """
@@ -289,7 +291,7 @@ class RAGTools:
                 total_edges=0,
                 entity_types={},
                 relationship_types={},
-                connected=False
+                connected=False,
             )
 
         try:
@@ -300,7 +302,7 @@ class RAGTools:
                 total_edges=stats.get("total_relationships", 0),
                 entity_types={"episodes": stats.get("total_episodes", 0)},
                 relationship_types={},
-                connected=stats.get("connected", False)
+                connected=stats.get("connected", False),
             )
 
         except Exception as e:
@@ -310,7 +312,7 @@ class RAGTools:
                 total_edges=0,
                 entity_types={},
                 relationship_types={},
-                connected=False
+                connected=False,
             )
 
     async def get_vector_stats(self) -> VectorStats:
@@ -325,22 +327,19 @@ class RAGTools:
 
         if not self._vector_store:
             return VectorStats(
-                total_chunks=0,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                total_chunks=0, collection_name=settings.CHROMA_COLLECTION_NAME
             )
 
         try:
             count = self._vector_store.count()
             return VectorStats(
-                total_chunks=count,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                total_chunks=count, collection_name=settings.CHROMA_COLLECTION_NAME
             )
 
         except Exception as e:
             logger.error(f"Failed to get vector stats: {e}")
             return VectorStats(
-                total_chunks=0,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                total_chunks=0, collection_name=settings.CHROMA_COLLECTION_NAME
             )
 
     # ==================== Document Management Tools ====================
@@ -350,7 +349,7 @@ class RAGTools:
         status: Optional[str] = None,
         source_type: Optional[str] = None,
         search: Optional[str] = None,
-        limit: int = 20
+        limit: int = 20,
     ) -> List[DocumentInfo]:
         """
         List tracked documents with optional filtering.
@@ -367,10 +366,7 @@ class RAGTools:
         try:
             tracker = get_document_tracker()
             documents = tracker.list_documents(
-                status=status,
-                source_type=source_type,
-                search=search,
-                limit=limit
+                status=status, source_type=source_type, search=search, limit=limit
             )
 
             return [
@@ -381,9 +377,10 @@ class RAGTools:
                     source_type=doc.source_type,
                     status=doc.status,
                     chunk_count=doc.chunk_count,
-                    created_at=doc.created_at
+                    created_at=doc.created_at,
                 )
-                for doc in documents if doc
+                for doc in documents
+                if doc
             ]
 
         except Exception as e:
@@ -406,7 +403,7 @@ class RAGTools:
                 by_status=stats.get("by_status", {}),
                 by_source_type=stats.get("by_source_type", {}),
                 total_vectors=stats.get("total_vectors", 0),
-                total_graph_nodes=stats.get("total_graph_nodes", 0)
+                total_graph_nodes=stats.get("total_graph_nodes", 0),
             )
 
         except Exception as e:
@@ -416,14 +413,11 @@ class RAGTools:
                 by_status={},
                 by_source_type={},
                 total_vectors=0,
-                total_graph_nodes=0
+                total_graph_nodes=0,
             )
 
     async def delete_document(
-        self,
-        doc_id: str,
-        delete_vectors: bool = True,
-        delete_graph_nodes: bool = True
+        self, doc_id: str, delete_vectors: bool = True, delete_graph_nodes: bool = True
     ) -> DeleteResult:
         """
         Delete a document and its associated data from all databases.
@@ -449,7 +443,7 @@ class RAGTools:
                     documents_deleted=0,
                     vectors_deleted=0,
                     graph_nodes_deleted=0,
-                    message=f"Document {doc_id} not found"
+                    message=f"Document {doc_id} not found",
                 )
 
             vectors_deleted = 0
@@ -466,7 +460,9 @@ class RAGTools:
             # Note: Graphiti doesn't expose direct node deletion
             # Graph data is managed through temporal invalidation
             if delete_graph_nodes and document.graph_node_ids:
-                logger.info(f"Graph node deletion requested but not supported with Graphiti")
+                logger.info(
+                    "Graph node deletion requested but not supported with Graphiti"
+                )
 
             # Delete document record
             tracker.delete_document(doc_id)
@@ -476,7 +472,7 @@ class RAGTools:
                 documents_deleted=1,
                 vectors_deleted=vectors_deleted,
                 graph_nodes_deleted=graph_nodes_deleted,
-                message=f"Successfully deleted document '{document.title}'"
+                message=f"Successfully deleted document '{document.title}'",
             )
 
         except Exception as e:
@@ -486,14 +482,14 @@ class RAGTools:
                 documents_deleted=0,
                 vectors_deleted=0,
                 graph_nodes_deleted=0,
-                message=f"Error: {str(e)}"
+                message=f"Error: {str(e)}",
             )
 
     async def delete_by_source(
         self,
         source_pattern: str,
         delete_vectors: bool = True,
-        delete_graph_nodes: bool = True
+        delete_graph_nodes: bool = True,
     ) -> DeleteResult:
         """
         Delete all documents from a specific source.
@@ -518,7 +514,7 @@ class RAGTools:
                     documents_deleted=0,
                     vectors_deleted=0,
                     graph_nodes_deleted=0,
-                    message=f"No documents found matching '{source_pattern}'"
+                    message=f"No documents found matching '{source_pattern}'",
                 )
 
             total_vectors = 0
@@ -545,7 +541,7 @@ class RAGTools:
                 documents_deleted=total_docs,
                 vectors_deleted=total_vectors,
                 graph_nodes_deleted=0,
-                message=f"Deleted {total_docs} documents matching '{source_pattern}'"
+                message=f"Deleted {total_docs} documents matching '{source_pattern}'",
             )
 
         except Exception as e:
@@ -555,7 +551,7 @@ class RAGTools:
                 documents_deleted=0,
                 vectors_deleted=0,
                 graph_nodes_deleted=0,
-                message=f"Error: {str(e)}"
+                message=f"Error: {str(e)}",
             )
 
     async def create_entity(
@@ -563,7 +559,7 @@ class RAGTools:
         name: str,
         entity_type: str,
         properties: Optional[Dict[str, Any]] = None,
-        description: Optional[str] = None
+        description: Optional[str] = None,
     ) -> EntityCreateResult:
         """
         Create or update an entity in the knowledge graph using Graphiti.
@@ -585,9 +581,7 @@ class RAGTools:
 
         if not self._graphiti:
             return EntityCreateResult(
-                success=False,
-                entity_id=None,
-                message="Graph database not available"
+                success=False, entity_id=None, message="Graph database not available"
             )
 
         try:
@@ -616,13 +610,13 @@ class RAGTools:
                 return EntityCreateResult(
                     success=True,
                     entity_id=entity_id,
-                    message=f"Successfully created entity '{name}' of type '{entity_type}' ({nodes_created} nodes)"
+                    message=f"Successfully created entity '{name}' of type '{entity_type}' ({nodes_created} nodes)",
                 )
             else:
                 return EntityCreateResult(
                     success=False,
                     entity_id=None,
-                    message=result.get("error", "Failed to create entity")
+                    message=result.get("error", "Failed to create entity"),
                 )
 
         except Exception as e:
@@ -630,7 +624,7 @@ class RAGTools:
             return EntityCreateResult(
                 success=False,
                 entity_id=None,
-                message=f"Error creating entity: {str(e)}"
+                message=f"Error creating entity: {str(e)}",
             )
 
     async def create_relationship(
@@ -638,7 +632,7 @@ class RAGTools:
         source_entity: str,
         target_entity: str,
         relationship_type: str,
-        properties: Optional[Dict[str, Any]] = None
+        properties: Optional[Dict[str, Any]] = None,
     ) -> EntityCreateResult:
         """
         Create a relationship between two entities in the knowledge graph using Graphiti.
@@ -660,9 +654,7 @@ class RAGTools:
 
         if not self._graphiti:
             return EntityCreateResult(
-                success=False,
-                entity_id=None,
-                message="Graph database not available"
+                success=False, entity_id=None, message="Graph database not available"
             )
 
         try:
@@ -687,17 +679,19 @@ class RAGTools:
             if result.get("status") == "success":
                 episode_id = result.get("episode_id")
                 edges_created = result.get("edges_created", 0)
-                logger.info(f"Created relationship via Graphiti: {source_entity} -[{relationship_type}]-> {target_entity}")
+                logger.info(
+                    f"Created relationship via Graphiti: {source_entity} -[{relationship_type}]-> {target_entity}"
+                )
                 return EntityCreateResult(
                     success=True,
                     entity_id=episode_id,
-                    message=f"Successfully created relationship '{source_entity}' -[{relationship_type}]-> '{target_entity}' ({edges_created} edges)"
+                    message=f"Successfully created relationship '{source_entity}' -[{relationship_type}]-> '{target_entity}' ({edges_created} edges)",
                 )
             else:
                 return EntityCreateResult(
                     success=False,
                     entity_id=None,
-                    message=result.get("error", "Failed to create relationship")
+                    message=result.get("error", "Failed to create relationship"),
                 )
 
         except Exception as e:
@@ -705,7 +699,7 @@ class RAGTools:
             return EntityCreateResult(
                 success=False,
                 entity_id=None,
-                message=f"Error creating relationship: {str(e)}"
+                message=f"Error creating relationship: {str(e)}",
             )
 
     async def clear_all_data(self, confirm: bool = False) -> DeleteResult:
@@ -726,7 +720,7 @@ class RAGTools:
                 documents_deleted=0,
                 vectors_deleted=0,
                 graph_nodes_deleted=0,
-                message="Deletion not confirmed. Set confirm=True to delete all data."
+                message="Deletion not confirmed. Set confirm=True to delete all data.",
             )
 
         try:
@@ -742,7 +736,9 @@ class RAGTools:
 
             # Note: Graphiti/FalkorDB graph clearing requires direct database access
             # For now, we just clear the document tracker
-            logger.warning("Graph data clearing not implemented - reset FalkorDB manually if needed")
+            logger.warning(
+                "Graph data clearing not implemented - reset FalkorDB manually if needed"
+            )
 
             # Clear document tracker
             try:
@@ -759,7 +755,7 @@ class RAGTools:
                 documents_deleted=docs_cleared,
                 vectors_deleted=vectors_cleared,
                 graph_nodes_deleted=0,
-                message=f"Cleared data: {docs_cleared} documents, {vectors_cleared} vectors. Graph requires manual reset."
+                message=f"Cleared data: {docs_cleared} documents, {vectors_cleared} vectors. Graph requires manual reset.",
             )
 
         except Exception as e:
@@ -769,7 +765,7 @@ class RAGTools:
                 documents_deleted=0,
                 vectors_deleted=0,
                 graph_nodes_deleted=0,
-                message=f"Error: {str(e)}"
+                message=f"Error: {str(e)}",
             )
 
 
@@ -783,4 +779,3 @@ def get_rag_tools() -> RAGTools:
     if _rag_tools_instance is None:
         _rag_tools_instance = RAGTools()
     return _rag_tools_instance
-

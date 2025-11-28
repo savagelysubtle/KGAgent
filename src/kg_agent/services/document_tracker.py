@@ -12,6 +12,11 @@ from ..core.config import settings
 from ..core.logging import logger
 
 
+def utc_now_iso() -> str:
+    """Return current UTC time as ISO string with Z suffix for proper timezone handling."""
+    return datetime.utcnow().isoformat() + "Z"
+
+
 class DocumentStatus(str, Enum):
     """Status of a document in the system."""
     PENDING = "pending"
@@ -174,7 +179,7 @@ class DocumentTrackerService:
         import json
 
         doc_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -266,7 +271,9 @@ class DocumentTrackerService:
             query += " AND (title LIKE ? OR source_url LIKE ?)"
             params.extend([f"%{search}%", f"%{search}%"])
 
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        # Order by updated_at to show most recently modified documents first
+        # This is important for pipeline activity tracking
+        query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
 
         with self._get_connection() as conn:
@@ -315,7 +322,7 @@ class DocumentTrackerService:
             return self.get_document(doc_id)
 
         updates.append("updated_at = ?")
-        params.append(datetime.utcnow().isoformat())
+        params.append(utc_now_iso())
         params.append(doc_id)
 
         with self._get_connection() as conn:
@@ -329,7 +336,7 @@ class DocumentTrackerService:
 
     def add_vector_ids(self, doc_id: str, vector_ids: List[str]):
         """Add vector IDs (ChromaDB) associated with a document."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -344,7 +351,7 @@ class DocumentTrackerService:
 
     def add_graph_node_ids(self, doc_id: str, node_ids: List[str], node_type: str = "Document"):
         """Add graph node IDs (FalkorDB) associated with a document."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -407,7 +414,7 @@ class DocumentTrackerService:
 
     def _add_history(self, doc_id: str, action: str, status: str, details: Optional[str] = None):
         """Add a processing history entry."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

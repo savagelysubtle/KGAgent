@@ -5,14 +5,14 @@ Tracks the progress of long-running jobs so they can be paused and resumed,
 even after application shutdown.
 """
 
+import json
 import sqlite3
 import uuid
-import json
+from dataclasses import asdict, dataclass
 from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Set
-from dataclasses import dataclass, asdict, field
 from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 from ..core.config import settings
 from ..core.logging import logger
@@ -20,14 +20,22 @@ from ..core.logging import logger
 
 class DateTimeEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles datetime objects."""
+
     def default(self, obj):
         if isinstance(obj, datetime):
-            return obj.isoformat()
+            # Add Z suffix to indicate UTC timezone
+            return obj.isoformat() + "Z"
         return super().default(obj)
+
+
+def utc_now_iso() -> str:
+    """Return current UTC time as ISO string with Z suffix."""
+    return datetime.utcnow().isoformat() + "Z"
 
 
 class JobStatus(str, Enum):
     """Status of a processing job."""
+
     PENDING = "pending"
     RUNNING = "running"
     PAUSED = "paused"
@@ -38,6 +46,7 @@ class JobStatus(str, Enum):
 
 class JobType(str, Enum):
     """Type of processing job."""
+
     ENTITY_EXTRACTION = "entity_extraction"
     GRAPH_BUILDING = "graph_building"
     EMBEDDING = "embedding"
@@ -46,6 +55,7 @@ class JobType(str, Enum):
 @dataclass
 class ProcessingJob:
     """Represents a processing job that can be paused and resumed."""
+
     id: str
     doc_id: str
     job_type: str
@@ -78,6 +88,7 @@ class ProcessingJob:
 @dataclass
 class ProcessedChunk:
     """Tracks which chunks have been processed for a job."""
+
     job_id: str
     chunk_id: str
     chunk_index: int
@@ -132,9 +143,18 @@ class ProcessingJobTracker:
                     paused_at TEXT,
                     completed_at TEXT,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    pause_requested INTEGER DEFAULT 0
                 )
             """)
+
+            # Add pause_requested column if it doesn't exist (migration)
+            try:
+                cursor.execute(
+                    "ALTER TABLE processing_jobs ADD COLUMN pause_requested INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
             # Processed chunks table - tracks which chunks have been done
             cursor.execute("""
@@ -178,14 +198,52 @@ class ProcessingJobTracker:
             """)
 
             # Indexes for performance
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_doc_id ON processing_jobs(doc_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON processing_jobs(status)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_job_id ON processed_chunks(job_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_entities_job_id ON extracted_entities(job_id)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_relationships_job_id ON extracted_relationships(job_id)")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_doc_id ON processing_jobs(doc_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_status ON processing_jobs(status)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chunks_job_id ON processed_chunks(job_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entities_job_id ON extracted_entities(job_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_relationships_job_id ON extracted_relationships(job_id)"
+            )
 
             conn.commit()
             logger.info("Processing job database schema initialized")
+
+        # Reset any "zombie" running jobs from previous server instances
+        self._reset_zombie_jobs()
+
+    def _reset_zombie_jobs(self):
+        """Reset jobs that were running when the server died.
+
+        On startup, any job marked as "running" is a zombie (the worker that was
+        processing it is gone). Reset these to "paused" so they can be resumed.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE processing_jobs
+                SET status = ?, paused_at = ?, pause_requested = 0,
+                    error_message = 'Server restarted - job paused automatically'
+                WHERE status = ?
+            """,
+                (JobStatus.PAUSED.value, utc_now_iso(), JobStatus.RUNNING.value),
+            )
+
+            if cursor.rowcount > 0:
+                logger.warning(
+                    f"Reset {cursor.rowcount} zombie job(s) from 'running' to 'paused' "
+                    "(server was restarted while they were processing)"
+                )
+            conn.commit()
 
     # ==================== Job Management ====================
 
@@ -194,28 +252,31 @@ class ProcessingJobTracker:
         doc_id: str,
         job_type: JobType,
         total_chunks: int,
-        options: Dict[str, Any] = None
+        options: Dict[str, Any] = None,
     ) -> ProcessingJob:
         """Create a new processing job."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
         job_id = str(uuid.uuid4())
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO processing_jobs
                 (id, doc_id, job_type, status, total_chunks, options, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                job_id,
-                doc_id,
-                job_type.value if isinstance(job_type, JobType) else job_type,
-                JobStatus.PENDING.value,
-                total_chunks,
-                json.dumps(options or {}),
-                now,
-                now
-            ))
+            """,
+                (
+                    job_id,
+                    doc_id,
+                    job_type.value if isinstance(job_type, JobType) else job_type,
+                    JobStatus.PENDING.value,
+                    total_chunks,
+                    json.dumps(options or {}),
+                    now,
+                    now,
+                ),
+            )
             conn.commit()
 
         logger.info(f"Created processing job {job_id} for document {doc_id}")
@@ -250,13 +311,40 @@ class ProcessingJobTracker:
                 updated_at=row["updated_at"],
             )
 
+    def update_job_options(self, job_id: str, options: Dict[str, Any]) -> bool:
+        """Update the options for a job (e.g., to change batch_size).
+
+        Only works for pending or paused jobs.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE processing_jobs
+                SET options = ?, updated_at = ?
+                WHERE id = ? AND status IN (?, ?)
+                """,
+                (
+                    json.dumps(options),
+                    utc_now_iso(),
+                    job_id,
+                    JobStatus.PENDING.value,
+                    JobStatus.PAUSED.value,
+                ),
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info(f"Updated options for job {job_id}: {options}")
+                return True
+            return False
+
     def get_jobs_for_document(self, doc_id: str) -> List[ProcessingJob]:
         """Get all jobs for a document."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM processing_jobs WHERE doc_id = ? ORDER BY created_at DESC",
-                (doc_id,)
+                (doc_id,),
             )
             rows = cursor.fetchall()
             return [self._row_to_job(row) for row in rows]
@@ -265,11 +353,19 @@ class ProcessingJobTracker:
         """Get the active (running or paused) job for a document."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT * FROM processing_jobs
                 WHERE doc_id = ? AND status IN (?, ?, ?)
                 ORDER BY created_at DESC LIMIT 1
-            """, (doc_id, JobStatus.PENDING.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value))
+            """,
+                (
+                    doc_id,
+                    JobStatus.PENDING.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PAUSED.value,
+                ),
+            )
             row = cursor.fetchone()
             return self._row_to_job(row) if row else None
 
@@ -277,11 +373,14 @@ class ProcessingJobTracker:
         """Get all jobs that can be resumed (paused or pending)."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT * FROM processing_jobs
                 WHERE status IN (?, ?)
                 ORDER BY updated_at DESC
-            """, (JobStatus.PAUSED.value, JobStatus.PENDING.value))
+            """,
+                (JobStatus.PAUSED.value, JobStatus.PENDING.value),
+            )
             rows = cursor.fetchall()
             return [self._row_to_job(row) for row in rows]
 
@@ -289,11 +388,18 @@ class ProcessingJobTracker:
         """Get all active jobs (pending, running, or paused)."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT * FROM processing_jobs
                 WHERE status IN (?, ?, ?)
                 ORDER BY updated_at DESC
-            """, (JobStatus.PENDING.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value))
+            """,
+                (
+                    JobStatus.PENDING.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PAUSED.value,
+                ),
+            )
             rows = cursor.fetchall()
             return [self._row_to_job(row) for row in rows]
 
@@ -301,11 +407,14 @@ class ProcessingJobTracker:
         """Get all jobs, ordered by most recent first."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT * FROM processing_jobs
                 ORDER BY updated_at DESC
                 LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cursor.fetchall()
             return [self._row_to_job(row) for row in rows]
 
@@ -334,14 +443,25 @@ class ProcessingJobTracker:
 
     def start_job(self, job_id: str) -> Optional[ProcessingJob]:
         """Start or resume a job."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE processing_jobs
-                SET status = ?, started_at = COALESCE(started_at, ?), paused_at = NULL, updated_at = ?
+                SET status = ?, started_at = COALESCE(started_at, ?), paused_at = NULL,
+                    updated_at = ?, pause_requested = 0
                 WHERE id = ? AND status IN (?, ?)
-            """, (JobStatus.RUNNING.value, now, now, job_id, JobStatus.PENDING.value, JobStatus.PAUSED.value))
+            """,
+                (
+                    JobStatus.RUNNING.value,
+                    now,
+                    now,
+                    job_id,
+                    JobStatus.PENDING.value,
+                    JobStatus.PAUSED.value,
+                ),
+            )
             conn.commit()
 
         logger.info(f"Started job {job_id}")
@@ -349,29 +469,84 @@ class ProcessingJobTracker:
 
     def pause_job(self, job_id: str) -> Optional[ProcessingJob]:
         """Pause a running job."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE processing_jobs
-                SET status = ?, paused_at = ?, updated_at = ?
+                SET status = ?, paused_at = ?, updated_at = ?, pause_requested = 0
                 WHERE id = ? AND status = ?
-            """, (JobStatus.PAUSED.value, now, now, job_id, JobStatus.RUNNING.value))
+            """,
+                (JobStatus.PAUSED.value, now, now, job_id, JobStatus.RUNNING.value),
+            )
             conn.commit()
 
         logger.info(f"Paused job {job_id}")
         return self.get_job(job_id)
 
-    def complete_job(self, job_id: str) -> Optional[ProcessingJob]:
-        """Mark a job as completed."""
-        now = datetime.utcnow().isoformat()
+    def request_pause(self, job_id: str) -> bool:
+        """Request a job to pause. Sets a flag that the worker will check.
+
+        This is used for cross-worker communication when running with multiple workers.
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
+                UPDATE processing_jobs
+                SET pause_requested = 1, updated_at = ?
+                WHERE id = ? AND status = ?
+            """,
+                (utc_now_iso(), job_id, JobStatus.RUNNING.value),
+            )
+            conn.commit()
+            updated = cursor.rowcount > 0
+
+        if updated:
+            logger.info(f"Pause requested for job {job_id}")
+        return updated
+
+    def is_pause_requested(self, job_id: str) -> bool:
+        """Check if a pause has been requested for a job.
+
+        Used by workers to check if they should pause.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT pause_requested FROM processing_jobs WHERE id = ?", (job_id,)
+            )
+            row = cursor.fetchone()
+            return bool(row and row[0])
+
+    def clear_pause_request(self, job_id: str):
+        """Clear the pause request flag after pausing or resuming."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE processing_jobs
+                SET pause_requested = 0
+                WHERE id = ?
+            """,
+                (job_id,),
+            )
+            conn.commit()
+
+    def complete_job(self, job_id: str) -> Optional[ProcessingJob]:
+        """Mark a job as completed."""
+        now = utc_now_iso()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
                 UPDATE processing_jobs
                 SET status = ?, completed_at = ?, updated_at = ?
                 WHERE id = ?
-            """, (JobStatus.COMPLETED.value, now, now, job_id))
+            """,
+                (JobStatus.COMPLETED.value, now, now, job_id),
+            )
             conn.commit()
 
         logger.info(f"Completed job {job_id}")
@@ -379,14 +554,17 @@ class ProcessingJobTracker:
 
     def fail_job(self, job_id: str, error_message: str) -> Optional[ProcessingJob]:
         """Mark a job as failed."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE processing_jobs
                 SET status = ?, error_message = ?, updated_at = ?
                 WHERE id = ?
-            """, (JobStatus.FAILED.value, error_message, now, job_id))
+            """,
+                (JobStatus.FAILED.value, error_message, now, job_id),
+            )
             conn.commit()
 
         logger.error(f"Job {job_id} failed: {error_message}")
@@ -394,15 +572,24 @@ class ProcessingJobTracker:
 
     def cancel_job(self, job_id: str) -> Optional[ProcessingJob]:
         """Cancel a job."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 UPDATE processing_jobs
                 SET status = ?, updated_at = ?
                 WHERE id = ? AND status IN (?, ?, ?)
-            """, (JobStatus.CANCELLED.value, now, job_id,
-                  JobStatus.PENDING.value, JobStatus.RUNNING.value, JobStatus.PAUSED.value))
+            """,
+                (
+                    JobStatus.CANCELLED.value,
+                    now,
+                    job_id,
+                    JobStatus.PENDING.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.PAUSED.value,
+                ),
+            )
             conn.commit()
 
         logger.info(f"Cancelled job {job_id}")
@@ -416,10 +603,10 @@ class ProcessingJobTracker:
         processed_chunks: int = None,
         current_chunk_index: int = None,
         entities_extracted: int = None,
-        relationships_extracted: int = None
+        relationships_extracted: int = None,
     ):
         """Update job progress."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         updates = ["updated_at = ?"]
         params = [now]
@@ -441,11 +628,14 @@ class ProcessingJobTracker:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
+            cursor.execute(
+                f"""
                 UPDATE processing_jobs
-                SET {', '.join(updates)}
+                SET {", ".join(updates)}
                 WHERE id = ?
-            """, params)
+            """,
+                params,
+            )
             conn.commit()
 
     def record_processed_chunk(
@@ -454,18 +644,28 @@ class ProcessingJobTracker:
         chunk_id: str,
         chunk_index: int,
         entities_found: int = 0,
-        relationships_found: int = 0
+        relationships_found: int = 0,
     ):
         """Record that a chunk has been processed."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR REPLACE INTO processed_chunks
                 (job_id, chunk_id, chunk_index, entities_found, relationships_found, processed_at)
                 VALUES (?, ?, ?, ?, ?, ?)
-            """, (job_id, chunk_id, chunk_index, entities_found, relationships_found, now))
+            """,
+                (
+                    job_id,
+                    chunk_id,
+                    chunk_index,
+                    entities_found,
+                    relationships_found,
+                    now,
+                ),
+            )
             conn.commit()
 
     def get_processed_chunk_ids(self, job_id: str) -> Set[str]:
@@ -473,8 +673,7 @@ class ProcessingJobTracker:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT chunk_id FROM processed_chunks WHERE job_id = ?",
-                (job_id,)
+                "SELECT chunk_id FROM processed_chunks WHERE job_id = ?", (job_id,)
             )
             return {row["chunk_id"] for row in cursor.fetchall()}
 
@@ -485,59 +684,78 @@ class ProcessingJobTracker:
 
     # ==================== Entity/Relationship Storage ====================
 
-    def store_extracted_entity(self, job_id: str, chunk_id: str, entity_data: Dict[str, Any]):
+    def store_extracted_entity(
+        self, job_id: str, chunk_id: str, entity_data: Dict[str, Any]
+    ):
         """Store an extracted entity for later graph insertion."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO extracted_entities (job_id, chunk_id, entity_data, created_at)
                 VALUES (?, ?, ?, ?)
-            """, (job_id, chunk_id, json.dumps(entity_data, cls=DateTimeEncoder), now))
+            """,
+                (job_id, chunk_id, json.dumps(entity_data, cls=DateTimeEncoder), now),
+            )
             conn.commit()
 
-    def store_extracted_relationship(self, job_id: str, chunk_id: str, relationship_data: Dict[str, Any]):
+    def store_extracted_relationship(
+        self, job_id: str, chunk_id: str, relationship_data: Dict[str, Any]
+    ):
         """Store an extracted relationship for later graph insertion."""
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO extracted_relationships (job_id, chunk_id, relationship_data, created_at)
                 VALUES (?, ?, ?, ?)
-            """, (job_id, chunk_id, json.dumps(relationship_data, cls=DateTimeEncoder), now))
+            """,
+                (
+                    job_id,
+                    chunk_id,
+                    json.dumps(relationship_data, cls=DateTimeEncoder),
+                    now,
+                ),
+            )
             conn.commit()
 
-    def get_extracted_entities(self, job_id: str, not_inserted_only: bool = False) -> List[Dict[str, Any]]:
+    def get_extracted_entities(
+        self, job_id: str, not_inserted_only: bool = False
+    ) -> List[Dict[str, Any]]:
         """Get extracted entities for a job."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if not_inserted_only:
                 cursor.execute(
                     "SELECT entity_data FROM extracted_entities WHERE job_id = ? AND inserted_to_graph = 0",
-                    (job_id,)
+                    (job_id,),
                 )
             else:
                 cursor.execute(
                     "SELECT entity_data FROM extracted_entities WHERE job_id = ?",
-                    (job_id,)
+                    (job_id,),
                 )
             return [json.loads(row["entity_data"]) for row in cursor.fetchall()]
 
-    def get_extracted_relationships(self, job_id: str, not_inserted_only: bool = False) -> List[Dict[str, Any]]:
+    def get_extracted_relationships(
+        self, job_id: str, not_inserted_only: bool = False
+    ) -> List[Dict[str, Any]]:
         """Get extracted relationships for a job."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if not_inserted_only:
                 cursor.execute(
                     "SELECT relationship_data FROM extracted_relationships WHERE job_id = ? AND inserted_to_graph = 0",
-                    (job_id,)
+                    (job_id,),
                 )
             else:
                 cursor.execute(
                     "SELECT relationship_data FROM extracted_relationships WHERE job_id = ?",
-                    (job_id,)
+                    (job_id,),
                 )
             return [json.loads(row["relationship_data"]) for row in cursor.fetchall()]
 
@@ -547,7 +765,7 @@ class ProcessingJobTracker:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE extracted_entities SET inserted_to_graph = 1 WHERE job_id = ?",
-                (job_id,)
+                (job_id,),
             )
             conn.commit()
 
@@ -557,7 +775,7 @@ class ProcessingJobTracker:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE extracted_relationships SET inserted_to_graph = 1 WHERE job_id = ?",
-                (job_id,)
+                (job_id,),
             )
             conn.commit()
 
@@ -569,7 +787,9 @@ class ProcessingJobTracker:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM processed_chunks WHERE job_id = ?", (job_id,))
             cursor.execute("DELETE FROM extracted_entities WHERE job_id = ?", (job_id,))
-            cursor.execute("DELETE FROM extracted_relationships WHERE job_id = ?", (job_id,))
+            cursor.execute(
+                "DELETE FROM extracted_relationships WHERE job_id = ?", (job_id,)
+            )
             cursor.execute("DELETE FROM processing_jobs WHERE id = ?", (job_id,))
             conn.commit()
 
@@ -578,16 +798,20 @@ class ProcessingJobTracker:
     def cleanup_old_completed_jobs(self, days_old: int = 30):
         """Clean up completed jobs older than specified days."""
         from datetime import timedelta
+
         cutoff = (datetime.utcnow() - timedelta(days=days_old)).isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
             # Get old completed job IDs
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT id FROM processing_jobs
                 WHERE status = ? AND completed_at < ?
-            """, (JobStatus.COMPLETED.value, cutoff))
+            """,
+                (JobStatus.COMPLETED.value, cutoff),
+            )
             job_ids = [row["id"] for row in cursor.fetchall()]
 
             for job_id in job_ids:
@@ -606,4 +830,3 @@ def get_job_tracker() -> ProcessingJobTracker:
     if _job_tracker_instance is None:
         _job_tracker_instance = ProcessingJobTracker()
     return _job_tracker_instance
-

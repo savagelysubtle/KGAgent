@@ -13,6 +13,11 @@ from ..core.config import settings
 from ..core.logging import logger
 
 
+def utc_now_iso() -> str:
+    """Return current UTC time as ISO string with Z suffix for proper timezone handling."""
+    return datetime.utcnow().isoformat() + "Z"
+
+
 class MessageRole(str, Enum):
     """Role of a message in a conversation."""
     USER = "user"
@@ -136,7 +141,7 @@ class ChatHistoryService:
             Conversation object
         """
         conv_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -246,7 +251,7 @@ class ChatHistoryService:
             return self.get_conversation(conv_id)
 
         updates.append("updated_at = ?")
-        params.append(datetime.utcnow().isoformat())
+        params.append(utc_now_iso())
         params.append(conv_id)
 
         with self._get_connection() as conn:
@@ -294,7 +299,7 @@ class ChatHistoryService:
             ChatMessage object
         """
         msg_id = str(uuid.uuid4())
-        now = datetime.utcnow().isoformat()
+        now = utc_now_iso()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -407,7 +412,7 @@ class ChatHistoryService:
                 SET message_count = message_count - 1,
                     updated_at = ?
                 WHERE id = ?
-            """, (datetime.utcnow().isoformat(), conv_id))
+            """, (utc_now_iso(), conv_id))
 
             conn.commit()
 

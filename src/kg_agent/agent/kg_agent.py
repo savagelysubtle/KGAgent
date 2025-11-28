@@ -693,7 +693,7 @@ async def remember_about_user(
             output = "✅ **Fact Remembered**\n\n"
             output += f"- Fact: *{fact}*\n"
             output += f"- Category: {category}\n"
-            output += f"\nI'll remember this for our future conversations!"
+            output += "\nI'll remember this for our future conversations!"
         else:
             output = "❌ Failed to store this fact."
 

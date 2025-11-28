@@ -250,7 +250,7 @@ class GPTChatParser:
                     "source_path": str(path_obj),
                     "source_type": "gpt_chat_export",
                     "conversation_count": len(json_data) if json_data else 0,
-                    "parsed_at": datetime.utcnow().isoformat(),
+                    "parsed_at": datetime.utcnow().isoformat() + "Z",
                 },
             }
 

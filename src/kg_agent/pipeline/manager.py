@@ -1,6 +1,7 @@
 import uuid
 import asyncio
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -14,6 +15,19 @@ from ..services.vector_store import VectorStoreService
 from ..services.graphiti_service import get_graphiti_service
 from ..services.document_tracker import get_document_tracker, DocumentStatus, DocumentSource
 from ..core.logging import logger
+
+
+# Thread pool for CPU-bound pipeline operations (parsing, chunking)
+_pipeline_executor: Optional[ThreadPoolExecutor] = None
+
+
+def get_pipeline_executor() -> ThreadPoolExecutor:
+    """Get or create the pipeline thread pool executor."""
+    global _pipeline_executor
+    if _pipeline_executor is None:
+        _pipeline_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
+        logger.info("Created pipeline ThreadPoolExecutor with 2 workers")
+    return _pipeline_executor
 
 class PipelineManager:
     """
@@ -150,23 +164,44 @@ class PipelineManager:
 
             logger.info(f"Generated {len(all_chunks)} total chunks")
 
-            # 5. Embed & Store Vectors
+            # 5. Embed & Store Vectors in streaming batches to avoid memory exhaustion
+            EMBED_BATCH_SIZE = 2000
             if all_chunks:
-                logger.info(f"Step 5: Generating embeddings for {len(all_chunks)} chunks...")
+                total_chunks = len(all_chunks)
+                logger.info(f"Step 5: Generating embeddings and storing {total_chunks} chunks in batches of {EMBED_BATCH_SIZE}...")
 
-                # Extract text for embedding
-                texts = [chunk.text for chunk in all_chunks]
+                loop = asyncio.get_event_loop()
 
-                # Generate embeddings in batches
-                embeddings = self.embedder.embed_batch(texts)
+                for batch_start in range(0, total_chunks, EMBED_BATCH_SIZE):
+                    batch_end = min(batch_start + EMBED_BATCH_SIZE, total_chunks)
+                    batch_num = batch_start // EMBED_BATCH_SIZE + 1
+                    total_batches = (total_chunks + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
 
-                # Assign embeddings to chunks
-                for i, chunk in enumerate(all_chunks):
-                    if i < len(embeddings):
-                        chunk.embedding = embeddings[i]
+                    logger.info(f"Processing batch {batch_num}/{total_batches}: chunks {batch_start} to {batch_end}")
 
-                logger.info("Step 6: Storing vectors in ChromaDB...")
-                self.vector_store.add_chunks(all_chunks)
+                    # Get batch of chunks
+                    batch_chunks = all_chunks[batch_start:batch_end]
+                    batch_texts = [chunk.text for chunk in batch_chunks]
+
+                    # Embed this batch (async, no progress bar for sub-batches)
+                    batch_embeddings = await self.embedder.embed_batch_async(batch_texts, show_progress=False)
+
+                    # Assign embeddings
+                    for i, chunk in enumerate(batch_chunks):
+                        if i < len(batch_embeddings):
+                            chunk.embedding = batch_embeddings[i]
+
+                    # Store immediately
+                    await loop.run_in_executor(
+                        get_pipeline_executor(),
+                        lambda chunks=batch_chunks: self.vector_store.add_chunks(chunks)
+                    )
+
+                    # Clear embeddings from memory
+                    for chunk in batch_chunks:
+                        chunk.embedding = None
+
+                    logger.info(f"Batch {batch_num}/{total_batches} complete")
 
             # 6. Build Knowledge Graph via Graphiti
             graph_node_ids = []
@@ -218,13 +253,13 @@ class PipelineManager:
                     doc_id,
                     status=DocumentStatus.COMPLETED.value,
                     chunk_count=len(doc_chunks),
-                    processed_at=datetime.utcnow().isoformat()
+                    processed_at=datetime.utcnow().isoformat() + "Z"
                 )
 
             summary = {
                 "status": "success",
                 "job_id": job_id,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
                 "document_ids": tracked_doc_ids,
                 "metrics": {
                     "urls_submitted": len(urls),
@@ -264,13 +299,19 @@ class PipelineManager:
                 "document_ids": tracked_doc_ids
             }
 
-    async def run_file_pipeline(self, file_paths: List[str], job_id: str = None) -> Dict[str, Any]:
+    async def run_file_pipeline(
+        self,
+        file_paths: List[str],
+        job_id: str = None,
+        original_filenames: Optional[Dict[str, str]] = None
+    ) -> Dict[str, Any]:
         """
         Run the pipeline for uploaded files (skipping crawl step).
 
         Args:
             file_paths: List of paths to already saved raw files.
             job_id: Optional job identifier.
+            original_filenames: Optional mapping of file_path -> original filename.
 
         Returns:
             Dictionary containing paths to generated artifacts.
@@ -288,7 +329,12 @@ class PipelineManager:
             # Create document records for each file
             for file_path in file_paths:
                 path_obj = Path(file_path)
-                filename = path_obj.name
+                # Use original filename if provided, otherwise fall back to path name
+                filename = (
+                    original_filenames.get(file_path, path_obj.name)
+                    if original_filenames
+                    else path_obj.name
+                )
 
                 # Generate content hash for deduplication
                 try:
@@ -297,7 +343,7 @@ class PipelineManager:
                 except Exception:
                     content_hash = None
 
-                # Create document record
+                # Create document record with original filename as title
                 doc = self.document_tracker.create_document(
                     title=filename,
                     source_type=DocumentSource.FILE_UPLOAD.value,
@@ -316,9 +362,18 @@ class PipelineManager:
                 # Update status to processing
                 self.document_tracker.update_document(doc.id, status=DocumentStatus.PROCESSING.value)
 
-            # 1. Parse (Docling)
+            # 1. Parse (Docling) - Run in thread pool to avoid blocking
             logger.info(f"Step 1: Parsing {len(file_paths)} uploaded documents...")
-            parsed_paths = self.parser.process_batch(file_paths, job_id)
+            # Update status to parsing
+            for doc_id in tracked_doc_ids:
+                self.document_tracker.update_document(doc_id, status="parsing")
+
+            # Run parsing in thread pool (CPU-bound operation)
+            loop = asyncio.get_event_loop()
+            parsed_paths = await loop.run_in_executor(
+                get_pipeline_executor(),
+                lambda: self.parser.process_batch(file_paths, job_id)
+            )
 
             if not parsed_paths:
                 logger.warning("Parsing yielded no results.")
@@ -336,9 +391,17 @@ class PipelineManager:
                     "document_ids": tracked_doc_ids
                 }
 
-            # 2. Chunk
+            # 2. Chunk - Run in thread pool to avoid blocking
             logger.info(f"Step 2: Chunking {len(parsed_paths)} parsed documents...")
-            chunk_files = self.chunker.process_batch(parsed_paths, job_id)
+            # Update status to chunking
+            for doc_id in tracked_doc_ids:
+                self.document_tracker.update_document(doc_id, status="chunking")
+
+            # Run chunking in thread pool (CPU-bound operation)
+            chunk_files = await loop.run_in_executor(
+                get_pipeline_executor(),
+                lambda: self.chunker.process_batch(parsed_paths, job_id)
+            )
 
             all_chunks = []
             doc_chunks_map = {}  # Map doc_id to its chunks
@@ -360,25 +423,62 @@ class PipelineManager:
 
             logger.info(f"Generated {len(all_chunks)} total chunks")
 
-            # 3. Embed & Store Vectors
+            # 3. Embed & Store Vectors in streaming batches to avoid memory exhaustion
+            # Process in batches of 2000 chunks to keep memory usage reasonable
+            EMBED_BATCH_SIZE = 2000
             vector_ids_stored = []
+
             if all_chunks:
-                logger.info(f"Step 3: Generating embeddings for {len(all_chunks)} chunks...")
-                texts = [chunk.text for chunk in all_chunks]
-                embeddings = self.embedder.embed_batch(texts)
+                total_chunks = len(all_chunks)
+                logger.info(f"Step 3: Generating embeddings and storing {total_chunks} chunks in batches of {EMBED_BATCH_SIZE}...")
 
-                for i, chunk in enumerate(all_chunks):
-                    if i < len(embeddings):
-                        chunk.embedding = embeddings[i]
+                # Update status to embedding
+                for doc_id in tracked_doc_ids:
+                    self.document_tracker.update_document(doc_id, status="embedding")
 
-                logger.info("Step 4: Storing vectors in ChromaDB...")
-                self.vector_store.add_chunks(all_chunks)
-                vector_ids_stored = [chunk.id for chunk in all_chunks]
+                loop = asyncio.get_event_loop()
+
+                for batch_start in range(0, total_chunks, EMBED_BATCH_SIZE):
+                    batch_end = min(batch_start + EMBED_BATCH_SIZE, total_chunks)
+                    batch_num = batch_start // EMBED_BATCH_SIZE + 1
+                    total_batches = (total_chunks + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
+
+                    logger.info(f"Processing batch {batch_num}/{total_batches}: chunks {batch_start} to {batch_end}")
+
+                    # Get batch of chunks
+                    batch_chunks = all_chunks[batch_start:batch_end]
+                    batch_texts = [chunk.text for chunk in batch_chunks]
+
+                    # Embed this batch (async to avoid blocking)
+                    batch_embeddings = await self.embedder.embed_batch_async(batch_texts, show_progress=False)
+
+                    # Assign embeddings to chunks
+                    for i, chunk in enumerate(batch_chunks):
+                        if i < len(batch_embeddings):
+                            chunk.embedding = batch_embeddings[i]
+
+                    # Store this batch to ChromaDB immediately (don't hold in memory)
+                    await loop.run_in_executor(
+                        get_pipeline_executor(),
+                        lambda chunks=batch_chunks: self.vector_store.add_chunks(chunks)
+                    )
+
+                    # Track stored IDs
+                    vector_ids_stored.extend([chunk.id for chunk in batch_chunks])
+
+                    # Clear embeddings from memory after storing
+                    for chunk in batch_chunks:
+                        chunk.embedding = None
+
+                    logger.info(f"Batch {batch_num}/{total_batches} complete: {len(batch_chunks)} chunks embedded and stored")
 
             # 4. Build Knowledge Graph via Graphiti
             graph_node_ids = []
             if all_chunks:
                 logger.info("Step 5: Building Knowledge Graph in FalkorDB via Graphiti...")
+                # Update status to graphing
+                for doc_id in tracked_doc_ids:
+                    self.document_tracker.update_document(doc_id, status="graphing")
                 await self.graphiti_service.initialize()
 
                 # Build graph by adding chunks as episodes
@@ -425,13 +525,13 @@ class PipelineManager:
                     doc_id,
                     status=DocumentStatus.COMPLETED.value,
                     chunk_count=len(doc_chunks),
-                    processed_at=datetime.utcnow().isoformat()
+                    processed_at=datetime.utcnow().isoformat() + "Z"
                 )
 
             summary = {
                 "status": "success",
                 "job_id": job_id,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
                 "document_ids": tracked_doc_ids,
                 "metrics": {
                     "files_submitted": len(file_paths),

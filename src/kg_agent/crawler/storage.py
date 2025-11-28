@@ -79,7 +79,7 @@ class StorageService:
             logger.error(f"Failed to save raw content for {crawl_result.url}: {e}")
             return None
 
-    async def save_uploaded_file(self, file_content: bytes, filename: str, job_id: str = "default") -> Optional[str]:
+    async def save_uploaded_file(self, file_content: bytes, filename: str, job_id: str = "default") -> Optional[tuple[str, str]]:
         """
         Save an uploaded file to storage.
 
@@ -89,7 +89,7 @@ class StorageService:
             job_id: Identifier for the current job.
 
         Returns:
-            Path to the saved file.
+            Tuple of (path to saved file, original filename) or None if failed.
         """
         try:
             job_dir = self.base_dir / job_id
@@ -106,7 +106,8 @@ class StorageService:
                 f.write(file_content)
 
             logger.info(f"Saved uploaded file {filename} to {target_path}")
-            return str(target_path)
+            # Return both the path and original filename
+            return (str(target_path), filename)
 
         except Exception as e:
             logger.error(f"Failed to save uploaded file {filename}: {e}")

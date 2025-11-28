@@ -228,6 +228,45 @@ export function DocumentManager() {
     },
   });
 
+  // Fix titles mutation
+  const fixTitlesMutation = useMutation({
+    mutationFn: async () => {
+      return documentsApi.fixTitles();
+    },
+    onSuccess: (response) => {
+      const result = response.data;
+      if (result.fixed > 0) {
+        toast.success(`Fixed ${result.fixed} document titles`);
+      } else {
+        toast.info(`Checked ${result.checked} documents, no titles needed fixing`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (error) => {
+      toast.error(`Failed to fix titles: ${error}`);
+    },
+  });
+
+  // Delete stale mutation
+  const deleteStaleMutation = useMutation({
+    mutationFn: async () => {
+      return documentsApi.deleteStale();
+    },
+    onSuccess: (response) => {
+      const result = response.data;
+      if (result.deleted > 0) {
+        toast.success(`Deleted ${result.deleted} stale documents`);
+      } else {
+        toast.info(`Checked ${result.checked} documents, no stale documents found`);
+      }
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+      queryClient.invalidateQueries({ queryKey: ["document-stats"] });
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete stale documents: ${error}`);
+    },
+  });
+
   const documents: Document[] = documentsData?.documents || [];
   const stats = statsData;
 
@@ -347,6 +386,7 @@ export function DocumentManager() {
                 onClick={() => syncMutation.mutate()}
                 disabled={syncMutation.isPending}
                 className="border-green-500/30 text-green-400 hover:bg-green-500/20"
+                title="Import data from ChromaDB/FalkorDB into tracker"
               >
                 {syncMutation.isPending ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -354,6 +394,36 @@ export function DocumentManager() {
                   <Database className="h-4 w-4 mr-2" />
                 )}
                 Sync Data
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fixTitlesMutation.mutate()}
+                disabled={fixTitlesMutation.isPending}
+                className="border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/20"
+                title="Fix hash-based titles using original filenames from metadata"
+              >
+                {fixTitlesMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <FileText className="h-4 w-4 mr-2" />
+                )}
+                Fix Titles
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => deleteStaleMutation.mutate()}
+                disabled={deleteStaleMutation.isPending}
+                className="border-orange-500/30 text-orange-400 hover:bg-orange-500/20"
+                title="Delete stuck/failed documents with no chunks"
+              >
+                {deleteStaleMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-2" />
+                )}
+                Clean Stale
               </Button>
               <Button
                 variant="outline"

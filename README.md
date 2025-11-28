@@ -168,6 +168,142 @@ cd dashboard && bun run dev
 - **API Docs**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
 
+---
+
+## 🐳 Docker Deployment (Standalone App)
+
+Run KG Agent as a fully containerized standalone application—no Python or Node.js
+installation required on your machine!
+
+### Prerequisites
+
+- **Docker Desktop** with at least 8GB RAM allocated
+- **LM Studio** running on your host machine (or another OpenAI-compatible LLM)
+
+### Quick Start with Docker
+
+**Windows (PowerShell):**
+
+```powershell
+# Clone the repository
+git clone <repository-url>
+cd kg-agent
+
+# Start everything with one command
+.\scripts\start-local.ps1 -Build -Detached
+```
+
+**Linux/macOS:**
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd kg-agent
+
+# Make script executable and run
+chmod +x scripts/start-local.sh
+./scripts/start-local.sh --build --detached
+```
+
+**Or use Docker Compose directly:**
+
+```bash
+# Copy the Docker environment template
+cp .env.docker .env
+
+# Build and start all services
+docker compose -f docker-compose.local.yml up --build -d
+```
+
+### What Gets Started
+
+| Service       | Port | Description                          |
+| ------------- | ---- | ------------------------------------ |
+| **Dashboard** | 3000 | Next.js web interface                |
+| **API**       | 8000 | FastAPI backend with Swagger docs    |
+| **FalkorDB**  | 6380 | Graph database with vector search    |
+| **Redis**     | 6379 | Message broker for background tasks  |
+| **Worker**    | -    | Celery worker for async processing   |
+
+### Managing the Docker Stack
+
+**Windows (PowerShell):**
+
+```powershell
+# View logs
+.\scripts\start-local.ps1 -Logs
+
+# Check status
+.\scripts\start-local.ps1 -Status
+
+# Stop everything
+.\scripts\start-local.ps1 -Down
+
+# Rebuild after code changes
+.\scripts\start-local.ps1 -Build -Detached
+```
+
+**Linux/macOS or direct Docker commands:**
+
+```bash
+# View logs
+docker compose -f docker-compose.local.yml logs -f
+
+# Check status
+docker compose -f docker-compose.local.yml ps
+
+# Stop everything
+docker compose -f docker-compose.local.yml down
+
+# Rebuild
+docker compose -f docker-compose.local.yml up --build -d
+```
+
+### LLM Configuration for Docker
+
+By default, the Docker containers connect to LM Studio running on your host machine
+via `host.docker.internal:1234`.
+
+**To use a different LLM provider**, edit `.env`:
+
+```env
+# OpenAI
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=sk-your-api-key
+LLM_MODEL_NAME=gpt-4o-mini
+
+# Ollama (running on host)
+LLM_BASE_URL=http://host.docker.internal:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL_NAME=llama3.2
+```
+
+### Data Persistence
+
+All data is persisted in local directories that are mounted into the containers:
+
+| Directory     | Purpose                              |
+| ------------- | ------------------------------------ |
+| `./storage`   | SQLite databases, uploaded files     |
+| `./data`      | ChromaDB vectors, processed chunks   |
+| `./models`    | Downloaded embedding models          |
+| `./cache`     | Crawler cache                        |
+| `./logs`      | Application logs                     |
+
+Your data survives container restarts and rebuilds!
+
+### Docker Resource Requirements
+
+| Resource | Minimum | Recommended |
+| -------- | ------- | ----------- |
+| RAM      | 4GB     | 8GB+        |
+| CPU      | 2 cores | 4+ cores    |
+| Disk     | 5GB     | 20GB+       |
+
+The first build downloads embedding models (~100MB) which are cached for future runs.
+
+---
+
 ## Usage
 
 ### Dashboard Features
