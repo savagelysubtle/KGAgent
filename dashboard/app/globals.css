@@ -121,3 +121,64 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* === Agent Reasoning Animations === */
+
+/* Animate-in utilities (supplements tw-animate-css) */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-in-from-left-2 {
+  from { transform: translateX(-0.5rem); }
+  to { transform: translateX(0); }
+}
+
+@keyframes slide-in-from-bottom-4 {
+  from { transform: translateY(1rem); }
+  to { transform: translateY(0); }
+}
+
+.animate-in {
+  animation-duration: 200ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+}
+
+.fade-in { animation-name: fade-in; }
+.slide-in-from-left-2 { animation-name: slide-in-from-left-2; }
+.slide-in-from-bottom-4 { animation-name: slide-in-from-bottom-4; }
+
+/* Agent step pulse animation */
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: rgba(168, 85, 247, 0.3);
+  }
+  50% {
+    border-color: rgba(168, 85, 247, 0.6);
+  }
+}
+
+.agent-step-active {
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+/* Status panel shadow */
+.agent-status-panel {
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.1),
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06),
+    0 0 40px rgba(59, 130, 246, 0.1);
+}
+
+/* Thinking step hover */
+.thinking-step:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Agent icon glow */
+.agent-icon-active {
+  filter: drop-shadow(0 0 8px currentColor);
+}

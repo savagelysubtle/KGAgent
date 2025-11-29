@@ -10,14 +10,31 @@ from contextlib import asynccontextmanager
 
 from ..core.config import settings
 from ..core.logging import logger
-from .routes import crawl, health, session, upload, graph, stats, agent, documents, chat, reprocess
+from .routes import crawl, health, session, upload, graph, stats, documents, reprocess, preview, multi_agent
 from .middleware import add_process_time_header
+
+# Optional: AG-UI support
+try:
+    from .routes.agui import register_agui_endpoint, router as agui_router
+    AGUI_AVAILABLE = True
+except ImportError:
+    AGUI_AVAILABLE = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
     logger.info("Starting KG Agent Crawler API")
+
+    # Optionally register AG-UI endpoint for CopilotKit frontend support
+    if AGUI_AVAILABLE:
+        try:
+            from ..agent.multi import get_multi_agent
+            graph = get_multi_agent()
+            register_agui_endpoint(app, graph)
+        except Exception as e:
+            logger.warning(f"AG-UI registration skipped: {e}")
+
     yield
     logger.info("Shutting down KG Agent Crawler API")
 
@@ -85,21 +102,9 @@ app.include_router(
 )
 
 app.include_router(
-    agent.router,
-    prefix=f"{settings.API_V1_PREFIX}/agent",
-    tags=["agent"]
-)
-
-app.include_router(
     documents.router,
     prefix=f"{settings.API_V1_PREFIX}/documents",
     tags=["documents"]
-)
-
-app.include_router(
-    chat.router,
-    prefix=f"{settings.API_V1_PREFIX}/chat",
-    tags=["chat"]
 )
 
 app.include_router(
@@ -107,6 +112,27 @@ app.include_router(
     prefix=f"{settings.API_V1_PREFIX}/reprocess",
     tags=["reprocess"]
 )
+
+app.include_router(
+    preview.router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["preview"]
+)
+
+# Multi-agent routes
+app.include_router(
+    multi_agent.router,
+    prefix=settings.API_V1_PREFIX,
+    tags=["multi-agent"]
+)
+
+# AG-UI info endpoint (optional)
+if AGUI_AVAILABLE:
+    app.include_router(
+        agui_router,
+        prefix=settings.API_V1_PREFIX,
+        tags=["agui"]
+    )
 
 
 # Health check endpoint

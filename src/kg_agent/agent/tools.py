@@ -702,6 +702,152 @@ class RAGTools:
                 message=f"Error creating relationship: {str(e)}",
             )
 
+    # ==================== Document Addition Tools ====================
+
+    async def add_text_content(
+        self,
+        content: str,
+        title: str,
+        source_description: Optional[str] = None,
+    ) -> EntityCreateResult:
+        """
+        Add text content directly to the knowledge graph.
+
+        This creates an episode in Graphiti with the provided text content,
+        which will be processed to extract entities and relationships.
+
+        Args:
+            content: The text content to add
+            title: A title/name for this content
+            source_description: Description of where this content came from
+
+        Returns:
+            EntityCreateResult with details of the addition
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if not self._graphiti:
+            return EntityCreateResult(
+                success=False, entity_id=None, message="Graph database not available"
+            )
+
+        if not content or not content.strip():
+            return EntityCreateResult(
+                success=False, entity_id=None, message="No content provided"
+            )
+
+        try:
+            # Add as an episode to Graphiti
+            result = await self._graphiti.add_episode(
+                content=content,
+                name=f"document_{title}",
+                source_description=source_description
+                or f"User-provided content: {title}",
+            )
+
+            if result.get("status") == "success":
+                episode_id = result.get("episode_id")
+                nodes_created = result.get("nodes_created", 0)
+                edges_created = result.get("edges_created", 0)
+                logger.info(
+                    f"Added content to graph: {title} ({nodes_created} nodes, {edges_created} edges)"
+                )
+                return EntityCreateResult(
+                    success=True,
+                    entity_id=episode_id,
+                    message=f"Successfully added '{title}' to knowledge graph ({nodes_created} nodes, {edges_created} edges)",
+                )
+            else:
+                return EntityCreateResult(
+                    success=False,
+                    entity_id=None,
+                    message=result.get("error", "Failed to add content"),
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to add text content: {e}")
+            return EntityCreateResult(
+                success=False,
+                entity_id=None,
+                message=f"Error adding content: {str(e)}",
+            )
+
+    async def add_to_vector_store(
+        self,
+        text: str,
+        source: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> EntityCreateResult:
+        """
+        Add text directly to the vector store (ChromaDB) for semantic search.
+
+        Args:
+            text: The text content to add
+            source: Source identifier for the content
+            metadata: Additional metadata to store with the text
+
+        Returns:
+            EntityCreateResult with details of the addition
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if not self._embedder or not self._vector_store:
+            return EntityCreateResult(
+                success=False, entity_id=None, message="Vector store not available"
+            )
+
+        if not text or not text.strip():
+            return EntityCreateResult(
+                success=False, entity_id=None, message="No text provided"
+            )
+
+        try:
+            import uuid
+
+            from ..models.chunk import Chunk
+
+            # Generate embedding
+            embedding = await self._embedder.embed_text_async(text)
+
+            # Create unique IDs
+            chunk_id = str(uuid.uuid4())
+            doc_id = f"agent_added_{uuid.uuid4().hex[:8]}"
+
+            # Build metadata
+            meta = metadata or {}
+            meta["source"] = source
+            meta["added_by"] = "agent"
+
+            # Create a Chunk object to use the existing add_chunks method
+            chunk = Chunk(
+                id=chunk_id,
+                doc_id=doc_id,
+                text=text,
+                index=0,  # Single chunk, so index 0
+                metadata=meta,
+                embedding=embedding,
+            )
+
+            # Add to vector store using existing method
+            self._vector_store.add_chunks([chunk], embeddings=[embedding])
+
+            logger.info(f"Added text to vector store: {source} (id: {chunk_id})")
+            return EntityCreateResult(
+                success=True,
+                entity_id=chunk_id,
+                message=f"Successfully added text to vector store (id: {chunk_id})",
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to add to vector store: {e}")
+            return EntityCreateResult(
+                success=False,
+                entity_id=None,
+                message=f"Error adding to vector store: {str(e)}",
+            )
+
     async def clear_all_data(self, confirm: bool = False) -> DeleteResult:
         """
         Clear ALL data from all databases. Use with extreme caution!

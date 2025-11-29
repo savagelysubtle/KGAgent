@@ -7,6 +7,7 @@ import "@copilotkit/react-ui/styles.css";
 import { ReactNode } from "react";
 import { AgentActions } from "./agent-actions";
 import { ChatHistory } from "./chat-history";
+import { ChatInputWithUpload } from "./chat-input-with-upload";
 import { chatApi } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -126,12 +127,14 @@ export function CopilotProviderWithHistory({ children }: { children: ReactNode }
 I can help you with:
 • **Search** - "Search for documents about machine learning"
 • **Ask questions** - "Ask the agent what we know about Python"
+• **Upload files** - Drag & drop files to discuss them immediately
+• **Add to KB** - "Add these files to the knowledge base" to store permanently
 • **Start crawls** - "Start a crawl for https://example.com"
 • **List documents** - "List all documents" or "Show web crawl documents"
 • **Delete data** - "Delete document [id]" or "Delete documents from example.com"
 • **Stats** - "Show document statistics" or "Check agent health"
 
-What would you like to do?`;
+📎 **Tip:** Drop files into this chat to discuss them instantly!`;
 
   return (
     <CopilotKit runtimeUrl="/api/copilotkit">
@@ -149,6 +152,7 @@ What would you like to do?`;
         }}
         onSubmitMessage={handleSubmitMessage}
         onInProgress={handleInProgress}
+        Input={ChatInputWithUpload}
       >
         {children}
       </CopilotSidebar>

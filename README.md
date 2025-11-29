@@ -29,13 +29,14 @@ Studio.
 - **Automatic Deduplication**: Smart entity resolution and relationship merging
 - **Hybrid Search**: Combined vector + graph search for comprehensive retrieval
 
-### AI Agent
+### Multi-Agent System
 
-- **Local LLM**: Run entirely locally with LM Studio (Qwen, Llama, Mistral,
-  etc.)
+- **Hierarchical Architecture**: Manager agent orchestrates specialist agents
+- **Local LLM**: Run entirely locally with LM Studio (Qwen, Llama, Mistral, etc.)
+- **Specialist Agents**: Research, Memory, Knowledge, and Document leads
+- **Real-time Reasoning**: Thinking steps streamed to UI via CopilotKit
 - **RAG Tools**: Vector search, graph search, and hybrid retrieval
-- **CopilotKit Integration**: AI assistant in the dashboard UI
-- **Tool Calling**: Agent can search, create entities, and manage data
+- **Session Persistence**: Conversations persist across sessions
 
 ### Dashboard
 
@@ -50,16 +51,16 @@ Studio.
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Dashboard (Next.js)                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐ │
-│  │ Crawler  │ │ Upload   │ │ Graph    │ │ AI Agent (CopilotKit)│ │
-│  │ Control  │ │ Manager  │ │ Explorer │ │                      │ │
+│  │ Crawler  │ │ Upload   │ │ Graph    │ │Multi-Agent (CopilotKit)│
+│  │ Control  │ │ Manager  │ │ Explorer │ │   Reasoning Display  │ │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
                               │ REST API
 ┌─────────────────────────────────────────────────────────────────┐
 │                      FastAPI Backend                             │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────────┐ │
-│  │ Crawler  │ │ Document │ │ Reprocess│ │ Agent API            │ │
-│  │ Routes   │ │ Routes   │ │ Routes   │ │ (Chat, Tools, Stats) │ │
+│  │ Crawler  │ │ Document │ │ Reprocess│ │ Multi-Agent API      │ │
+│  │ Routes   │ │ Routes   │ │ Routes   │ │ (Chat, Stream, AGUI) │ │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -318,62 +319,74 @@ The first build downloads embedding models (~100MB) which are cached for future 
 | **Graph**     | Explore entities and relationships                  |
 | **Pipeline**  | Monitor processing status                           |
 
-### AI Agent
+### Multi-Agent System
 
-The AI agent (powered by CopilotKit) can:
+The multi-agent system (powered by CopilotKit) uses a **Manager** to delegate to
+specialist agents:
 
-- **Search knowledge base**: "What do we know about Python?"
-- **Get statistics**: "How many entities are in the graph?"
-- **Start crawls**: "Crawl https://example.com"
-- **Create entities**: "Create an entity for OpenAI"
-- **Delete data**: "Delete document xyz"
-- **Remember conversations**: All chats are saved to the knowledge graph
-- **Recall past discussions**: "What have we talked about before?"
-- **Learn about you**: "Remember that I prefer Python"
+**Try these queries:**
 
-### Conversation Memory
+- `"Search for Python tutorials"` → **Research Lead** searches knowledge base
+- `"My name is Steve"` → **Memory Lead** stores user fact
+- `"Create an entity for OpenAI"` → **Knowledge Lead** creates graph entity
+- `"List all documents"` → **Document Lead** lists documents
+- `"Search for AI and remember I'm interested in it"` → **Multiple agents** work together
 
-The agent **continuously learns** from your conversations:
+**Features:**
 
-- **Auto-save**: Every conversation is automatically saved to FalkorDB
+- **Real-time reasoning**: See agent thinking steps in the UI
+- **Multi-delegation**: One query can trigger multiple specialists
+- **Session persistence**: Conversations persist across sessions
+- **Streaming**: Watch responses build in real-time
+
+### Memory & Sessions
+
+The **Memory Lead** agent manages user context and conversation history:
+
+- **Auto-save**: Conversations are automatically persisted
 - **User profile**: The agent builds a profile of your preferences over time
 - **Context recall**: Past discussions are retrieved to provide better answers
-- **Persistent memory**: Knowledge persists across sessions
-
-**Teach the agent about yourself:**
+- **Session persistence**: Use session IDs for conversation continuity
 
 ```bash
-# Store a preference
-curl -X POST http://localhost:8000/api/v1/agent/memory/learn/preference \
+# Create a session
+curl -X POST http://localhost:8000/api/v1/multi-agent/session \
   -H "Content-Type: application/json" \
-  -d '{"key": "favorite_language", "value": "Python"}'
+  -d '{"user_id": "steve", "metadata": {"source": "api"}}'
 
-# Store a fact
-curl -X POST http://localhost:8000/api/v1/agent/memory/learn/fact \
+# Chat with session (for continuity)
+curl -X POST http://localhost:8000/api/v1/multi-agent/chat \
   -H "Content-Type: application/json" \
-  -d '{"fact": "User is a software developer", "category": "work"}'
+  -d '{"message": "My name is Steve", "session_id": "your-session-id"}'
 
-# View your profile
-curl http://localhost:8000/api/v1/agent/memory/profile
-
-# Search past conversations
-curl "http://localhost:8000/api/v1/agent/memory/recall?query=Python+programming"
+# Later, in the same session
+curl -X POST http://localhost:8000/api/v1/multi-agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is my name?", "session_id": "your-session-id"}'
 ```
 
 ### API Examples
 
-**Chat with Agent:**
+**Chat with Multi-Agent:**
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/agent/chat \
+curl -X POST http://localhost:8000/api/v1/multi-agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Search for Python tutorials"}'
+```
+
+**Stream Chat Response:**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/multi-agent/chat/stream \
   -H "Content-Type: application/json" \
   -d '{"message": "What documents do we have?"}'
 ```
 
-**Search Knowledge Base:**
+**Check System Status:**
 
 ```bash
-curl "http://localhost:8000/api/v1/agent/tools/search?query=machine+learning&search_type=hybrid"
+curl http://localhost:8000/api/v1/multi-agent/status
 ```
 
 **Upload Document:**
@@ -394,7 +407,7 @@ curl -X POST http://localhost:8000/api/v1/reprocess/start \
 **Get Graph Stats:**
 
 ```bash
-curl http://localhost:8000/api/v1/reprocess/graph/stats
+curl http://localhost:8000/api/v1/stats/graph
 ```
 
 ## Configuration
@@ -438,28 +451,43 @@ Available tasks in `.vscode/tasks.json`:
 ```
 kg-agent/
 ├── src/kg_agent/
-│   ├── agent/           # AI Agent with RAG tools
-│   │   ├── kg_agent.py  # Pydantic AI agent
-│   │   └── tools.py     # Search & management tools
-│   ├── api/routes/      # FastAPI endpoints
-│   │   ├── agent.py     # Agent chat & tools
-│   │   ├── documents.py # Document management
-│   │   ├── reprocess.py # Entity extraction
-│   │   └── upload.py    # File uploads
+│   ├── agent/              # Multi-Agent System
+│   │   ├── multi/          # LangGraph multi-agent
+│   │   │   ├── graph.py    # StateGraph definition
+│   │   │   ├── manager.py  # Manager agent (orchestrator)
+│   │   │   ├── research_lead.py   # Research specialist
+│   │   │   ├── memory_lead.py     # Memory specialist
+│   │   │   ├── knowledge_lead.py  # Knowledge specialist
+│   │   │   ├── document_lead.py   # Document specialist
+│   │   │   ├── state.py    # Shared state TypedDict
+│   │   │   └── session.py  # Session management
+│   │   ├── tools.py        # RAG tools (search, CRUD)
+│   │   └── llm.py          # Shared LLM configuration
+│   ├── api/routes/         # FastAPI endpoints
+│   │   ├── multi_agent.py  # Multi-agent chat & sessions
+│   │   ├── agui.py         # CopilotKit AG-UI endpoint
+│   │   ├── documents.py    # Document management
+│   │   ├── reprocess.py    # Entity extraction
+│   │   └── upload.py       # File uploads
 │   ├── services/
 │   │   ├── graphiti_service.py    # FalkorDB via Graphiti
 │   │   ├── vector_store.py        # ChromaDB operations
 │   │   ├── resumable_pipeline.py  # Entity extraction
 │   │   └── document_tracker.py    # Document metadata
-│   ├── crawler/         # Web crawling service
-│   └── core/            # Config, logging
-├── dashboard/           # Next.js frontend
-│   ├── app/             # Pages (App Router)
-│   ├── components/      # React components
-│   └── lib/             # API client, utilities
+│   ├── crawler/            # Web crawling service
+│   └── core/               # Config, logging
+├── dashboard/              # Next.js frontend
+│   ├── app/                # Pages (App Router)
+│   ├── components/         # React components
+│   │   ├── agent-reasoning.tsx   # Reasoning display
+│   │   ├── agent-status-panel.tsx # Status panel
+│   │   └── copilot-provider.tsx  # CopilotKit setup
+│   └── lib/                # API client, utilities
+├── docs/                   # Documentation
+│   └── multi-agent-architecture.md
 ├── docker-compose.dev.yml  # Development services
-├── main.py              # FastAPI entry point
-└── .env.example         # Environment template
+├── main.py                 # FastAPI entry point
+└── .env.example            # Environment template
 ```
 
 ## Development
@@ -529,11 +557,12 @@ uv run python scripts/recover_entities.py
 ## Tech Stack
 
 - **Backend**: FastAPI, Pydantic, asyncio
+- **Multi-Agent**: LangGraph, Pydantic AI
 - **Knowledge Graph**: FalkorDB, Graphiti
 - **Vector Store**: ChromaDB, sentence-transformers
 - **LLM**: LM Studio (local), OpenAI-compatible API
-- **Agent**: Pydantic AI, CopilotKit
 - **Frontend**: Next.js 16, React, Tailwind CSS, shadcn/ui
+- **AI Assistant**: CopilotKit (AG-UI protocol)
 - **Crawler**: Crawl4AI, Playwright
 - **Package Manager**: uv (Python), bun (Node.js)
 

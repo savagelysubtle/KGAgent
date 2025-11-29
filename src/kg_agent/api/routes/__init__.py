@@ -1,5 +1,27 @@
 """API route handlers."""
 
-from . import crawl, health, session, graph, stats, upload, agent, documents, chat, reprocess
+from . import (
+    crawl,
+    documents,
+    graph,
+    health,
+    multi_agent,
+    preview,
+    reprocess,
+    session,
+    stats,
+    upload,
+)
 
-__all__ = ["crawl", "health", "session", "graph", "stats", "upload", "agent", "documents", "chat", "reprocess"]
+__all__ = [
+    "crawl",
+    "documents",
+    "graph",
+    "health",
+    "multi_agent",
+    "preview",
+    "reprocess",
+    "session",
+    "stats",
+    "upload",
+]

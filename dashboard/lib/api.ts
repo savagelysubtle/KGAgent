@@ -13,10 +13,33 @@ export const crawlApi = {
 };
 
 export const uploadApi = {
+  // Upload files to the knowledge base (triggers full pipeline)
   uploadFiles: (files: File[]) => {
     const formData = new FormData();
     files.forEach(file => formData.append('files', file));
     return api.post('/api/v1/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+
+  // Preview files without storing (for immediate chat context)
+  previewFiles: (files: File[]) => {
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    return api.post<{
+      status: string;
+      files: Array<{
+        filename: string;
+        content: string;
+        chunk_count: number;
+        file_type: string;
+        size_bytes: number;
+      }>;
+      total_content_length: number;
+      message: string;
+    }>('/api/v1/preview', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },

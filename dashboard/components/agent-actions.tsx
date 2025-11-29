@@ -1,15 +1,30 @@
 "use client";
 
 import { useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
-import { crawlApi, graphApi, agentApi, documentsApi } from "@/lib/api";
+import { crawlApi, graphApi, agentApi, documentsApi, uploadApi } from "@/lib/api";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
+import { fileContextStore, type PreviewedFile } from "./chat-input-with-upload";
 
 export function AgentActions() {
   const [dbStats, setDbStats] = useState<{
     vectorStore?: { total_chunks: number };
     graphDatabase?: { total_nodes: number; total_edges: number; connected: boolean };
   }>({});
+
+  // Track previewed files for agent context
+  const [previewedFiles, setPreviewedFiles] = useState<PreviewedFile[]>([]);
+
+  // Subscribe to file context changes
+  useEffect(() => {
+    // Initial load
+    setPreviewedFiles(fileContextStore.getFiles());
+
+    // Subscribe to changes
+    return fileContextStore.subscribe(() => {
+      setPreviewedFiles(fileContextStore.getFiles());
+    });
+  }, []);
 
   // Fetch database stats periodically to provide context
   useEffect(() => {
@@ -34,6 +49,22 @@ export function AgentActions() {
   useCopilotReadable({
     description: "Current knowledge base statistics",
     value: dbStats,
+  });
+
+  // Provide uploaded/previewed file content as context to the Copilot
+  // This allows the agent to discuss files immediately without storing them
+  useCopilotReadable({
+    description: "Files uploaded by the user for discussion (not yet stored in knowledge base). The agent can answer questions about these files immediately.",
+    value: previewedFiles.length > 0 ? {
+      file_count: previewedFiles.length,
+      files: previewedFiles.map(f => ({
+        filename: f.filename,
+        file_type: f.file_type,
+        size_bytes: f.size_bytes,
+        content: f.content,
+        chunk_count: f.chunk_count,
+      }))
+    } : null,
   });
 
   // Action to start a crawl
@@ -376,6 +407,103 @@ Components:
         toast.error("Failed to clear all data.");
         return "Failed to clear all data.";
       }
+    },
+  });
+
+  // ==================== Document Upload Actions ====================
+
+  // Action to add uploaded/previewed files to the knowledge base
+  useCopilotAction({
+    name: "addDocumentsToKnowledgeBase",
+    description: "Add the currently uploaded/previewed files to the knowledge base permanently. Use this when the user says 'add to database', 'save to knowledge base', 'store these files', etc.",
+    parameters: [],
+    handler: async () => {
+      const files = fileContextStore.getFiles();
+
+      if (files.length === 0) {
+        return "No files have been uploaded yet. Please drag and drop files into the chat first, or use the attachment button.";
+      }
+
+      // Get the original File objects
+      const originalFiles = files
+        .filter(f => f.file)
+        .map(f => f.file as File);
+
+      if (originalFiles.length === 0) {
+        return "The uploaded files are no longer available for storage. Please upload them again.";
+      }
+
+      try {
+        toast.info(`Adding ${originalFiles.length} file(s) to knowledge base...`);
+
+        const result = await uploadApi.uploadFiles(originalFiles);
+        const data = result.data;
+
+        // Clear the previewed files after successful upload
+        fileContextStore.clearFiles();
+
+        toast.success(`${originalFiles.length} file(s) added to knowledge base!`);
+
+        return `✅ **Files Added to Knowledge Base**
+- Job ID: \`${data.job_id}\`
+- Files received: ${data.files_received}
+- Status: ${data.status}
+- Message: ${data.message}
+
+The files are now being processed (parsed, chunked, and indexed). You can check the pipeline status or search for this content once processing completes.`;
+      } catch (error) {
+        console.error(error);
+        toast.error("Failed to add files to knowledge base.");
+        return "Failed to add files to the knowledge base. Please try again.";
+      }
+    },
+  });
+
+  // Action to clear uploaded files without storing
+  useCopilotAction({
+    name: "clearUploadedFiles",
+    description: "Clear/remove the currently uploaded files from the chat context without adding them to the knowledge base",
+    parameters: [],
+    handler: async () => {
+      const files = fileContextStore.getFiles();
+
+      if (files.length === 0) {
+        return "No files are currently uploaded.";
+      }
+
+      const count = files.length;
+      fileContextStore.clearFiles();
+      toast.info(`Cleared ${count} file(s) from chat context`);
+
+      return `✅ Cleared ${count} file(s) from the chat context. They were NOT added to the knowledge base.`;
+    },
+  });
+
+  // Action to get info about currently uploaded files
+  useCopilotAction({
+    name: "getUploadedFilesInfo",
+    description: "Get information about files currently uploaded in the chat (but not yet stored in knowledge base)",
+    parameters: [],
+    handler: async () => {
+      const files = fileContextStore.getFiles();
+
+      if (files.length === 0) {
+        return "No files are currently uploaded. You can drag and drop files into the chat or use the attachment button.";
+      }
+
+      let output = `📎 **Currently Uploaded Files** (${files.length} file(s))\n\n`;
+
+      for (const file of files) {
+        output += `**${file.filename}**\n`;
+        output += `- Type: ${file.file_type}\n`;
+        output += `- Size: ${(file.size_bytes / 1024).toFixed(1)} KB\n`;
+        output += `- Content length: ${file.content.length.toLocaleString()} chars\n`;
+        output += `- Estimated chunks: ${file.chunk_count}\n\n`;
+      }
+
+      output += `\n💡 **Tip:** Say "add to knowledge base" to store these files permanently, or ask questions about them directly.`;
+
+      return output;
     },
   });
 

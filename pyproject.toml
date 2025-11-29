@@ -33,6 +33,7 @@ dependencies    = [
     "langchain-openai>=0.2.0",
     "langsmith>=0.1.0",
     "copilotkit>=0.1.72",
+    "ag-ui-langgraph>=0.0.21",
 ]
 
     [project.optional-dependencies]
