@@ -348,6 +348,9 @@ class GraphitiService:
             return {
                 "status": "error",
                 "error": str(e),
+                "nodes_created": 0,
+                "edges_created": 0,
+                "episodes_processed": 0,
             }
 
     async def search(

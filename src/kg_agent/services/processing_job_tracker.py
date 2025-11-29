@@ -604,8 +604,9 @@ class ProcessingJobTracker:
         current_chunk_index: int = None,
         entities_extracted: int = None,
         relationships_extracted: int = None,
+        error_message: str = None,
     ):
-        """Update job progress."""
+        """Update job progress and optionally set error message."""
         now = utc_now_iso()
 
         updates = ["updated_at = ?"]
@@ -623,6 +624,9 @@ class ProcessingJobTracker:
         if relationships_extracted is not None:
             updates.append("relationships_extracted = ?")
             params.append(relationships_extracted)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
 
         params.append(job_id)
 
