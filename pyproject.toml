@@ -27,6 +27,12 @@ dependencies    = [
     "pydantic-ai>=0.2.0",
     "openai>=1.0.0",
     "requests>=2.32.5",
+    # Multi-agent orchestration
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langsmith>=0.1.0",
+    "copilotkit>=0.1.72",
 ]
 
     [project.optional-dependencies]
