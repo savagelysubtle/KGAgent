@@ -32,7 +32,8 @@ Studio.
 ### Multi-Agent System
 
 - **Hierarchical Architecture**: Manager agent orchestrates specialist agents
-- **Local LLM**: Run entirely locally with LM Studio (Qwen, Llama, Mistral, etc.)
+- **Local LLM**: Run entirely locally with LM Studio (Qwen, Llama, Mistral,
+  etc.)
 - **Specialist Agents**: Research, Memory, Knowledge, and Document leads
 - **Real-time Reasoning**: Thinking steps streamed to UI via CopilotKit
 - **RAG Tools**: Vector search, graph search, and hybrid retrieval
@@ -173,8 +174,8 @@ cd dashboard && bun run dev
 
 ## 🐳 Docker Deployment (Standalone App)
 
-Run KG Agent as a fully containerized standalone application—no Python or Node.js
-installation required on your machine!
+Run KG Agent as a fully containerized standalone application—no Python or
+Node.js installation required on your machine!
 
 ### Prerequisites
 
@@ -218,13 +219,13 @@ docker compose -f docker-compose.local.yml up --build -d
 
 ### What Gets Started
 
-| Service       | Port | Description                          |
-| ------------- | ---- | ------------------------------------ |
-| **Dashboard** | 3000 | Next.js web interface                |
-| **API**       | 8000 | FastAPI backend with Swagger docs    |
-| **FalkorDB**  | 6380 | Graph database with vector search    |
-| **Redis**     | 6379 | Message broker for background tasks  |
-| **Worker**    | -    | Celery worker for async processing   |
+| Service       | Port | Description                         |
+| ------------- | ---- | ----------------------------------- |
+| **Dashboard** | 3000 | Next.js web interface               |
+| **API**       | 8000 | FastAPI backend with Swagger docs   |
+| **FalkorDB**  | 6380 | Graph database with vector search   |
+| **Redis**     | 6379 | Message broker for background tasks |
+| **Worker**    | -    | Celery worker for async processing  |
 
 ### Managing the Docker Stack
 
@@ -262,8 +263,8 @@ docker compose -f docker-compose.local.yml up --build -d
 
 ### LLM Configuration for Docker
 
-By default, the Docker containers connect to LM Studio running on your host machine
-via `host.docker.internal:1234`.
+By default, the Docker containers connect to LM Studio running on your host
+machine via `host.docker.internal:1234`.
 
 **To use a different LLM provider**, edit `.env`:
 
@@ -283,13 +284,13 @@ LLM_MODEL_NAME=llama3.2
 
 All data is persisted in local directories that are mounted into the containers:
 
-| Directory     | Purpose                              |
-| ------------- | ------------------------------------ |
-| `./storage`   | SQLite databases, uploaded files     |
-| `./data`      | ChromaDB vectors, processed chunks   |
-| `./models`    | Downloaded embedding models          |
-| `./cache`     | Crawler cache                        |
-| `./logs`      | Application logs                     |
+| Directory   | Purpose                            |
+| ----------- | ---------------------------------- |
+| `./storage` | SQLite databases, uploaded files   |
+| `./data`    | ChromaDB vectors, processed chunks |
+| `./models`  | Downloaded embedding models        |
+| `./cache`   | Crawler cache                      |
+| `./logs`    | Application logs                   |
 
 Your data survives container restarts and rebuilds!
 
@@ -301,7 +302,8 @@ Your data survives container restarts and rebuilds!
 | CPU      | 2 cores | 4+ cores    |
 | Disk     | 5GB     | 20GB+       |
 
-The first build downloads embedding models (~100MB) which are cached for future runs.
+The first build downloads embedding models (~100MB) which are cached for future
+runs.
 
 ---
 
@@ -330,7 +332,8 @@ specialist agents:
 - `"My name is Steve"` → **Memory Lead** stores user fact
 - `"Create an entity for OpenAI"` → **Knowledge Lead** creates graph entity
 - `"List all documents"` → **Document Lead** lists documents
-- `"Search for AI and remember I'm interested in it"` → **Multiple agents** work together
+- `"Search for AI and remember I'm interested in it"` → **Multiple agents** work
+  together
 
 **Features:**
 
